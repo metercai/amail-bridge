@@ -214,15 +214,22 @@ Let's Encrypt 申请证书：
 
 ### 挑战方式
 
-当前仅支持 **HTTP-01**。bridge 临时监听 80 端口提供 `.well-known/acme-challenge/` token。
-**前提条件**：
+当前仅支持 **HTTP-01** — bridge 临时监听 80 端口提供 `.well-known/acme-challenge/` token。需要满足：
 
 - 域名 DNS 必须解析到 bridge 的公网 IP
 - 80 端口必须公网可达（防火墙 / 安全组放行）
 - 80 端口不能被其他进程占用（nginx/Apache）
 
-**DNS-01**（通过 DNS TXT 记录验证）尚未实现。如果部署环境无法暴露 80 端口，
-请使用静态证书（`tls_cert` / `tls_key`），或在 bridge 前放置反向代理。
+**DNS-01**（通过 DNS TXT 记录验证域名所有权）尚未实现。
+DNS-01 不依赖 80 端口，而是通过在域名的 DNS 中添加一条 `_acme-challenge` TXT 记录来
+证明域名控制权。适用于以下场景：
+
+- bridge 运行在反向代理或 CDN（如 Cloudflare）后面
+- 80 端口被封锁或已被占用
+- 需要全程 HTTPS，不希望中间有 HTTP 监听端口
+
+如果部署环境需要 DNS-01，请使用静态证书（`tls_cert` / `tls_key`），
+或在 bridge 前放置 nginx / Caddy 处理 ACME。
 
 ---
 

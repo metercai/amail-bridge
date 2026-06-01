@@ -227,16 +227,24 @@ Startup
 
 ### Challenge method
 
-Currently only **HTTP-01** is supported. The bridge temporarily binds port 80
-to serve the `.well-known/acme-challenge/` token. **Prerequisites**:
+Currently only **HTTP-01** is supported — the bridge temporarily binds port 80
+to serve the `.well-known/acme-challenge/` token. This requires:
 
 - The domain's DNS must resolve to the bridge's public IP
 - Port 80 must be reachable from the internet (firewall / security group)
 - No other process (nginx, Apache) may be using port 80 during challenge
 
-**DNS-01** (certificate via DNS TXT record) is not yet implemented. If your
-deployment cannot expose port 80, use static certificates (`tls_cert` / `tls_key`)
-or run a reverse proxy in front of the bridge.
+**DNS-01** (domain validation via a DNS TXT record) is not yet implemented.
+DNS-01 would eliminate the port 80 requirement by proving domain ownership
+through a `_acme-challenge` TXT record instead of an HTTP endpoint. This is
+useful when:
+
+- The bridge runs behind a reverse proxy or CDN (Cloudflare, etc.)
+- Port 80 is blocked or already occupied
+- You want end-to-end HTTPS without an intermediate HTTP listener
+
+If your deployment requires DNS-01, use static certificates (`tls_cert` /
+`tls_key`) or run nginx / Caddy in front of the bridge to handle ACME.
 
 ---
 
