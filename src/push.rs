@@ -253,24 +253,52 @@ pub async fn start_push_server(
         tracing::info!("amail-bridge (push mode) running on {}", addr);
     }
 
-    let shutdown_signal = async move {
-        loop {
-            if shutdown.load(Ordering::SeqCst) {
-                tracing::info!("Push server shutting down gracefully");
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    };
-
     #[cfg(feature = "tls")]
     if config.push.tls {
-        let tls_config = build_tls_config(&config.push)?;
+        // Determine TLS cert source: static files > ACME > HTTP fallback
+        let (cert_path, key_path) = if config.push.tls_cert.is_some() && config.push.tls_key.is_some() {
+            (config.push.tls_cert.clone().unwrap(), config.push.tls_key.clone().unwrap())
+        } else if !config.push.public_url.is_empty() {
+            match crate::acme::extract_domain(&config.push.public_url) {
+                Some(domain) => {
+                    let cache = config.push.acme_cache.clone()
+                        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
+                    tracing::info!(%domain, cache = %cache.display(), "Attempting ACME certificate...");
+                    match crate::acme::acquire_cert(&domain, &cache, None) {
+                        Ok(paths) => {
+                            tracing::info!("ACME succeeded — using auto-cert");
+                            (paths.cert, paths.key)
+                        }
+                        Err(e) => {
+                            tracing::warn!(%domain, error = %e,
+                                "ACME certificate acquisition failed — falling back to HTTP");
+                            return start_push_http(shutdown, app, addr).await;
+                        }
+                    }
+                }
+                None => {
+                    tracing::warn!("Cannot extract domain from public_url '{}' — falling back to HTTP",
+                                   config.push.public_url);
+                    return start_push_http(shutdown, app, addr).await;
+                }
+            }
+        } else {
+            tracing::warn!("TLS enabled but no cert config — falling back to HTTP");
+            return start_push_http(shutdown, app, addr).await;
+        };
+
+        let tls_config = build_tls_config_from_paths(&cert_path, &key_path)?;
         let handle = axum_server::Handle::new();
         let shutdown_handle = handle.clone();
+        let shutdown_tls = shutdown.clone();
         tokio::spawn(async move {
-            shutdown_signal.await;
-            tracing::info!("Push TLS server shutting down gracefully");
+            loop {
+                if shutdown_tls.load(Ordering::SeqCst) {
+                    tracing::info!("Push TLS server shutting down gracefully");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
             shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
         });
         axum_server::bind_rustls(addr, tls_config)
@@ -280,6 +308,23 @@ pub async fn start_push_server(
         return Ok(());
     }
 
+    start_push_http(shutdown, app, addr).await
+}
+
+async fn start_push_http(
+    shutdown: Arc<AtomicBool>,
+    app: Router,
+    addr: SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let shutdown_signal = async move {
+        loop {
+            if shutdown.load(Ordering::SeqCst) {
+                tracing::info!("Push server shutting down gracefully");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
         listener,
@@ -287,7 +332,6 @@ pub async fn start_push_server(
     )
     .with_graceful_shutdown(shutdown_signal)
     .await?;
-
     Ok(())
 }
 
@@ -366,14 +410,8 @@ async fn handle_batch_webhook(
 }
 
 #[cfg(feature = "tls")]
-fn build_tls_config(push: &crate::config::PushConfig) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
+fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
-
-    let cert_path = push.tls_cert.as_deref()
-        .ok_or("tls_cert path required when tls=true")?;
-    let key_path = push.tls_key.as_deref()
-        .ok_or("tls_key path required when tls=true")?;
-
     let cert_file = std::fs::File::open(cert_path)?;
     let key_file = std::fs::File::open(key_path)?;
     let mut cert_reader = BufReader::new(cert_file);

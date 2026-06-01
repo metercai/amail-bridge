@@ -29,6 +29,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 log = "0.4"
 
+acme-micro = "0.14"
+
 [features]
-default = []
+default = ["tls"]
 tls = ["axum-server/tls-rustls", "rustls", "rustls-pemfile"]

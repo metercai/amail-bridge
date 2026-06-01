@@ -14,6 +14,8 @@
 //! the log file (default: ~/.hermes/amail-bridge.log), and writes a PID file
 //! (default: ~/.hermes/amail-bridge.pid).
 
+#[cfg(feature = "tls")]
+mod acme;
 mod config;
 mod pull;
 mod push;
