@@ -4,14 +4,12 @@
 //! the target agent via the X-Amail-Email header, and forwards the
 //! raw body + all headers to the gateway's webhook port on localhost.
 //!
-//! Optional per-IP rate limiting for DDoS protection — configure
-//! `push.max_requests_per_sec` in amail_bridge.toml.
+//! Optional per-IP allowlist for DDoS protection — configure
+//! `push.allowed_ips` in amail_bridge.toml.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use axum::{
     body::Bytes,
@@ -35,39 +33,61 @@ pub struct PushState {
     pub config: BridgeConfig,
 }
 
-/// Per-IP sliding-window rate limiter.
-/// Window: 1 second.  If `max_per_sec` is exceeded the request gets 429.
+/// IP/CIDR allowlist.  Empty = allow all.  Otherwise, only requests from
+/// matching source IPs are permitted (403 Forbidden on mismatch).
 #[derive(Clone)]
-pub struct RateLimiter {
-    inner: Arc<Mutex<HashMap<IpAddr, (Instant, u32)>>>,
-    max_per_sec: u32,
+pub struct IpAllowlist {
+    entries: Vec<(IpAddr, u8)>,  // (network, prefix_len)
 }
 
-impl RateLimiter {
-    pub fn new(max_per_sec: u32) -> Self {
-        Self { inner: Arc::new(Mutex::new(HashMap::new())), max_per_sec }
+impl IpAllowlist {
+    /// Parse an allowlist from config strings ("192.168.1.1" or "10.0.0.0/8").
+    /// Invalid entries are logged and skipped.
+    pub fn from_config(raw: &[String]) -> Self {
+        let entries = raw.iter().filter_map(|s| {
+            match parse_cidr(s) {
+                Some(e) => Some(e),
+                None => {
+                    tracing::warn!(entry = %s, "Invalid IP/CIDR in allowed_ips — skipping");
+                    None
+                }
+            }
+        }).collect();
+        Self { entries }
     }
 
-    /// Returns `true` if the request is allowed, `false` if throttled.
-    pub fn check(&self, ip: IpAddr) -> bool {
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        let window_start = now - Duration::from_secs(1);
-
-        // Cleanup stale entries inline (cheap for typical deployment sizes)
-        map.retain(|_, (last, _)| *last >= window_start);
-
-        let entry = map.entry(ip).or_insert((now, 0));
-        if entry.0 < window_start {
-            *entry = (now, 1);
-            true
-        } else if entry.1 < self.max_per_sec {
-            entry.0 = now;
-            entry.1 += 1;
-            true
-        } else {
-            false
+    pub fn allows(&self, ip: IpAddr) -> bool {
+        if self.entries.is_empty() {
+            return true; // no allowlist = allow all
         }
+        self.entries.iter().any(|&(network, prefix)| ip_matches(ip, network, prefix))
+    }
+}
+
+/// Parse "192.168.1.1" or "10.0.0.0/8" into (network, prefix_len).
+fn parse_cidr(s: &str) -> Option<(IpAddr, u8)> {
+    let (ip_s, prefix) = if let Some((ip, pfx)) = s.split_once('/') {
+        (ip, pfx.parse::<u8>().ok()?)
+    } else {
+        (s, if s.contains(':') { 128 } else { 32 }) // implicit /32 or /128
+    };
+    let ip: IpAddr = ip_s.parse().ok()?;
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    if prefix > max { return None; }
+    Some((ip, prefix))
+}
+
+fn ip_matches(ip: IpAddr, network: IpAddr, prefix: u8) -> bool {
+    match (ip, network) {
+        (IpAddr::V4(ip), IpAddr::V4(net)) => {
+            let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
+            u32::from(ip) & mask == u32::from(net) & mask
+        }
+        (IpAddr::V6(ip), IpAddr::V6(net)) => {
+            let mask = if prefix == 0 { 0 } else { !0u128 << (128 - prefix) };
+            u128::from(ip) & mask == u128::from(net) & mask
+        }
+        _ => false,
     }
 }
 
@@ -79,26 +99,27 @@ pub fn build_push_router(state: PushState) -> Router {
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .with_state(state.clone());
 
-    if let Some(max_rps) = state.config.push.max_requests_per_sec {
-        let limiter = RateLimiter::new(max_rps);
-        router = router.layer(middleware::from_fn_with_state(limiter, rate_limit));
-        tracing::info!(max_rps, "Per-IP rate limiting enabled");
+    if !state.config.push.allowed_ips.is_empty() {
+        let allowlist = IpAllowlist::from_config(&state.config.push.allowed_ips);
+        router = router.layer(middleware::from_fn_with_state(allowlist, check_ip));
+        tracing::info!(count = state.config.push.allowed_ips.len(), "IP allowlist enabled");
     }
 
     router
 }
 
-/// Axum middleware: reject requests exceeding per-IP rate limit (429).
-async fn rate_limit(
-    State(limiter): State<RateLimiter>,
+/// Axum middleware: reject requests not in IP allowlist (403).
+async fn check_ip(
+    State(allowlist): State<IpAllowlist>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Result<axum::http::Response<axum::body::Body>, StatusCode> {
-    if limiter.check(addr.ip()) {
+    if allowlist.allows(addr.ip()) {
         Ok(next.run(request).await)
     } else {
-        Err(StatusCode::TOO_MANY_REQUESTS)
+        tracing::warn!(ip = %addr.ip(), "Blocked by IP allowlist");
+        Err(StatusCode::FORBIDDEN)
     }
 }
 

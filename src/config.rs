@@ -76,10 +76,11 @@ pub struct PushConfig {
     pub acme_cache: Option<PathBuf>,
     #[serde(default)]
     pub redirect_http: bool,
-    /// Per-IP rate limit for DDoS protection.  None = disabled.
-    /// Typical production value: 20–50 requests per second per IP.
+    /// IP/CIDR allowlist for DDoS protection.  Only requests from
+    /// these addresses can POST webhooks.  Empty = allow all.
+    /// Example: `allowed_ips = ["10.0.0.0/8", "192.168.1.1"]`
     #[serde(default)]
-    pub max_requests_per_sec: Option<u32>,
+    pub allowed_ips: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,8 +132,8 @@ impl BridgeConfig {
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_POLL_SECS") {
             cfg.pull.poll_interval_sec = v.parse().unwrap_or(10);
         }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_MAX_RPS") {
-            cfg.push.max_requests_per_sec = v.parse().ok();
+        if let Ok(v) = std::env::var("AMAIL_BRIDGE_ALLOWED_IPS") {
+            cfg.push.allowed_ips = v.split(',').map(|s| s.trim().to_string()).collect();
         }
         if let Ok(v) = std::env::var("HERMES_HOME") {
             cfg.hermes_home = Some(PathBuf::from(v));
