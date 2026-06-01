@@ -8,8 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use urlencoding::encode;
-
 use crate::config::BridgeConfig;
 use crate::router::ProfileRouter;
 
@@ -178,21 +176,20 @@ struct PendingDelivery {
 /// Fetch pending deliveries from relay.
 async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dyn std::error::Error>> {
     let emails: Vec<String> = state.router.list_emails();
-    let mut url = format!(
-        "{}/api/v1/admin/pending?system_id={}&limit=50",
+    let url = format!(
+        "{}/api/v1/admin/pending",
         state.config.pull.relay_url.trim_end_matches('/'),
-        encode(&state.config.pull.system_id),
     );
-    if !emails.is_empty() {
-        for email in &emails {
-            url.push_str(&format!("&email={}", encode(email)));
-        }
-    }
+    let body = serde_json::json!({
+        "limit": 50,
+        "emails": emails,
+    });
 
     let resp = state
         .http_client
-        .get(&url)
+        .post(&url)
         .header("X-Api-Key", &state.config.pull.admin_key)
+        .json(&body)
         .send()
         .await?
         .error_for_status()?;
