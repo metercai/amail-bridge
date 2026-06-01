@@ -177,11 +177,17 @@ struct PendingDelivery {
 
 /// Fetch pending deliveries from relay.
 async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dyn std::error::Error>> {
-    let url = format!(
+    let emails: Vec<String> = state.router.list_emails();
+    let mut url = format!(
         "{}/api/v1/admin/pending?system_id={}&limit=50",
         state.config.pull.relay_url.trim_end_matches('/'),
         encode(&state.config.pull.system_id),
     );
+    if !emails.is_empty() {
+        for email in &emails {
+            url.push_str(&format!("&email={}", encode(email)));
+        }
+    }
 
     let resp = state
         .http_client
