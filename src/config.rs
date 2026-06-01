@@ -78,12 +78,13 @@ impl Default for PullConfig {
 }
 
 impl BridgeConfig {
-    /// Load config from `amail_bridge.toml` in the working directory,
-    /// then apply environment variable overrides.
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+    /// Load config from a TOML file, then apply environment variable overrides.
+    pub fn load(path: Option<&std::path::Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let config_path = path
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("amail_bridge.toml"));
         let mut cfg: BridgeConfig = {
-            let path = std::env::current_dir()?.join("amail_bridge.toml");
-            let content = std::fs::read_to_string(&path)?;
+            let content = std::fs::read_to_string(&config_path)?;
             toml::from_str(&content)?
         };
 
@@ -107,5 +108,26 @@ impl BridgeConfig {
         cfg.default_profile_dir = hermes_root;
 
         Ok(cfg)
+    }
+
+    /// Validate configuration and emit warnings for insecure settings.
+    pub fn validate(&self) {
+        if self.mode == "pull" {
+            if self.pull.relay_url.is_empty() {
+                tracing::warn!("pull.relay_url is empty — pull loop will fail");
+            }
+            if self.pull.admin_key.is_empty() {
+                tracing::warn!("pull.admin_key is empty — authentication will fail");
+            }
+            if self.pull.system_id.is_empty() {
+                tracing::warn!("pull.system_id is empty — pending query will fail");
+            }
+        }
+        if self.mode == "push" && !self.push.tls && !self.push.public_url.is_empty() {
+            tracing::warn!("push.public_url is set but TLS is disabled — consider enabling TLS");
+        }
+        if self.push.tls && self.push.bind_port == 80 {
+            tracing::warn!("TLS enabled on port 80 — usually port 443 is expected");
+        }
     }
 }

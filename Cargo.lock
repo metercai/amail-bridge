@@ -21,6 +21,7 @@ dependencies = [
  "hex",
  "hmac",
  "hyper",
+ "libc",
  "log",
  "notify",
  "reqwest",

@@ -35,9 +35,11 @@ pub async fn start_pull_loop(
         config: config.clone(),
     };
 
-    let interval = Duration::from_secs(config.pull.poll_interval_sec);
-    let mut seen: HashMap<i64, Instant> = HashMap::new(); // delivery_id → forwarded_at
-    let seen_ttl = Duration::from_secs(7200); // 2h
+    let mut seen: HashMap<i64, Instant> = HashMap::new();
+    let seen_ttl = Duration::from_secs(7200);
+    let mut backoff_secs = config.pull.poll_interval_sec;
+    let mut consecutive_failures: u32 = 0;
+    const MAX_BACKOFF: u64 = 300; // 5 min
 
     tracing::info!(
         relay_url = %config.pull.relay_url,
@@ -58,6 +60,8 @@ pub async fn start_pull_loop(
 
         match fetch_pending(&state).await {
             Ok(deliveries) => {
+                consecutive_failures = 0;
+                backoff_secs = config.pull.poll_interval_sec;
                 if !deliveries.is_empty() {
                     tracing::info!(count = deliveries.len(), "Fetched pending deliveries");
                 }
@@ -146,11 +150,19 @@ pub async fn start_pull_loop(
                 seen.retain(|_, t| t.elapsed() < seen_ttl);
             }
             Err(e) => {
-                tracing::error!(error = %e, "Pull fetch failed");
+                consecutive_failures += 1;
+                backoff_secs = (config.pull.poll_interval_sec * 2_u64.pow(consecutive_failures.min(6)))
+                    .min(MAX_BACKOFF);
+                tracing::error!(
+                    error = %e,
+                    consecutive_failures,
+                    backoff_secs,
+                    "Pull fetch failed — backing off"
+                );
             }
         }
 
-        tokio::time::sleep(interval).await;
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
     }
 }
 

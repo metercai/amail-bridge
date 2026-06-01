@@ -32,7 +32,7 @@ impl ProfileRouter {
 
     /// Full scan of all profiles.
     pub fn full_scan(&self) {
-        let mut routes = self.routes.write().unwrap();
+        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
         routes.clear();
 
         // Scan ~/.hermes/profiles/<name>/
@@ -84,12 +84,11 @@ impl ProfileRouter {
 
     /// Look up the port for a given agent email address.
     pub fn lookup(&self, email: &str) -> Option<u16> {
-        self.routes.read().unwrap().get(email).copied()
+        self.routes.read().unwrap_or_else(|e| e.into_inner()).get(email).copied()
     }
 
-    /// Return the number of loaded routes.
     pub fn route_count(&self) -> usize {
-        self.routes.read().unwrap().len()
+        self.routes.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 

@@ -153,27 +153,74 @@ pub async fn start_push_server(
         tracing::info!("======================================================");
         tracing::info!("  amail-bridge (push mode) running on {}", addr);
         tracing::info!("  Public URL: {}", config.push.public_url);
+        tracing::info!("  TLS: {}", if config.push.tls { "enabled" } else { "disabled" });
         tracing::info!("  Add this to ~/.hermes/amail_relay.json:");
         tracing::info!("    \"bridge_url\": \"{}\"", bridge_url);
         tracing::info!("======================================================");
     } else {
-        tracing::info!("amail-bridge (push mode) running on {} (no public_url set)", addr);
+        tracing::info!("amail-bridge (push mode) running on {}", addr);
+    }
+
+    let shutdown_signal = async move {
+        loop {
+            if shutdown.load(Ordering::SeqCst) {
+                tracing::info!("Push server shutting down gracefully");
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
+
+    #[cfg(feature = "tls")]
+    if config.push.tls {
+        let tls_config = build_tls_config(&config.push)?;
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            shutdown_signal.await;
+            tracing::info!("Push TLS server shutting down gracefully");
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+        });
+        axum_server::bind_rustls(addr, tls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+        return Ok(());
     }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-
-    // Graceful shutdown: serve until SIGTERM
     axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            loop {
-                if shutdown.load(Ordering::SeqCst) {
-                    tracing::info!("Push server shutting down gracefully");
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        })
+        .with_graceful_shutdown(shutdown_signal)
         .await?;
 
     Ok(())
+}
+
+#[cfg(feature = "tls")]
+fn build_tls_config(push: &crate::config::PushConfig) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
+    use std::io::BufReader;
+
+    let cert_path = push.tls_cert.as_deref()
+        .ok_or("tls_cert path required when tls=true")?;
+    let key_path = push.tls_key.as_deref()
+        .ok_or("tls_key path required when tls=true")?;
+
+    let cert_file = std::fs::File::open(cert_path)?;
+    let key_file = std::fs::File::open(key_path)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let mut key_reader = BufReader::new(key_file);
+
+    let certs: Vec<rustls::pki_types::CertificateDer> =
+        rustls_pemfile::certs(&mut cert_reader)
+            .collect::<Result<_, _>>()?;
+    let key = rustls_pemfile::private_key(&mut key_reader)?
+        .ok_or("No private key found in tls_key file")?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+
+    Ok(axum_server::tls_rustls::RustlsConfig::from_config(
+        std::sync::Arc::new(config),
+    ))
 }
