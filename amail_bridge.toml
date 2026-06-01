@@ -1,0 +1,16 @@
+# amail-bridge configuration
+mode = "pull"  # "push" or "pull"
+
+# ── Push mode ──
+[push]
+bind_host = "0.0.0.0"
+bind_port = 38080
+tls = false
+# public_url = "https://bridge.example.com"   # For relay config hint
+
+# ── Pull mode ──
+[pull]
+relay_url = "http://127.0.0.1:38080"
+admin_key = "sk-..."   # system_admin API key from relay
+system_id = "admin"
+poll_interval_sec = 10

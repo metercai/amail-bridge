@@ -1,0 +1,27 @@
+[Unit]
+Description=amail-bridge — relay-gateway bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=%h/.hermes
+ExecStart=/usr/local/bin/amail-bridge
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.hermes
+
+[Install]
+WantedBy=multi-user.target
