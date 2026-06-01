@@ -1,16 +1,30 @@
-# amail-bridge configuration
+# ── amail-bridge configuration ─────────────────────────────────────
+# Docs: https://github.com/nousresearch/amail-bridge
+
 mode = "pull"  # "push" or "pull"
 
-# ── Push mode ──
+# ── Per-agent host overrides (multi-machine LAN deployments) ──────
+# Each agent's forward target is {host}:{port}.
+# Agents NOT listed default to 127.0.0.1 (same-machine).
+# Use IPs or hostnames reachable from the bridge machine.
+#
+# [hosts]
+# "alice@admin.relay" = "192.168.1.10"
+# "bob@admin.relay"   = "192.168.1.11"
+# "carol@admin.relay" = "agent-03.local"
+
+# ── Push mode (bridge receives external POSTs) ────────────────────
 [push]
 bind_host = "0.0.0.0"
 bind_port = 38080
 tls = false
-# public_url = "https://bridge.example.com"   # For relay config hint
+# public_url = "https://bridge.example.com"   # Printed at startup for relay config
+# tls_cert = "/etc/ssl/bridge.crt"            # Required when tls = true
+# tls_key  = "/etc/ssl/bridge.key"
 
-# ── Pull mode ──
+# ── Pull mode (bridge polls relay outbound) ───────────────────────
 [pull]
-relay_url = "http://127.0.0.1:38080"
+relay_url = "http://192.168.1.1:38080"
 admin_key = "sk-..."   # system_admin API key from relay
 system_id = "admin"
 poll_interval_sec = 10

@@ -158,7 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BridgeConfig::load(cli.config_path.as_deref())?;
     config.validate();
-    let router = Arc::new(router::ProfileRouter::new(&config.default_profile_dir));
+    let router = Arc::new(router::ProfileRouter::new(
+        &config.default_profile_dir,
+        config.hosts.clone(),
+    ));
 
     if let Err(e) = router::start_watcher(router.clone()) {
         tracing::warn!(error = %e, "Profile watcher failed to start — routes may be stale");

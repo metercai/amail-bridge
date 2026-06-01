@@ -1,5 +1,9 @@
-//! Profile router: email → (port) lookup table, auto-discovered from
+//! Profile router: email → (host, port) lookup table, auto-discovered from
 //! `~/.hermes/profiles/*/` and `~/.hermes/` (default profile).
+//!
+//! Per-agent host overrides come from `[hosts]` in `amail_bridge.toml`
+//! for multi-machine deployments. Agents without an explicit host entry
+//! default to `127.0.0.1` (same-machine).
 //!
 //! Uses `inotify` (via the `notify` crate) to watch for profile changes.
 
@@ -13,20 +17,31 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 #[derive(Debug, Clone)]
 pub struct ProfileRoute {
     pub email: String,
+    pub host: String,
     pub port: u16,
 }
 
-/// Thread-safe email → port routing table.
+impl ProfileRoute {
+    /// Build the forward target URL from this route.
+    pub fn target_url(&self) -> String {
+        format!("http://{}:{}/webhooks/amail-inbound", self.host, self.port)
+    }
+}
+
+/// Thread-safe email → route lookup table.
 pub struct ProfileRouter {
-    routes: RwLock<HashMap<String, u16>>,
+    routes: RwLock<HashMap<String, ProfileRoute>>,
     profiles_dir: PathBuf,
+    /// Per-email host overrides from config (default: 127.0.0.1 if absent).
+    host_overrides: HashMap<String, String>,
 }
 
 impl ProfileRouter {
-    pub fn new(hermes_home: &Path) -> Self {
+    pub fn new(hermes_home: &Path, host_overrides: HashMap<String, String>) -> Self {
         Self {
             routes: RwLock::new(HashMap::new()),
             profiles_dir: hermes_home.join("profiles"),
+            host_overrides,
         }
     }
 
@@ -40,9 +55,10 @@ impl ProfileRouter {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    if let Some(r) = Self::load_profile(&path) {
-                        tracing::info!(email = %r.email, port = r.port, "Route discovered (named profile)");
-                        routes.insert(r.email, r.port);
+                    if let Some(r) = self.load_route(&path) {
+                        tracing::info!(email = %r.email, host = %r.host, port = r.port,
+                                       "Route discovered (named profile)");
+                        routes.insert(r.email.clone(), r);
                     }
                 }
             }
@@ -51,16 +67,17 @@ impl ProfileRouter {
         // Scan default profile ~/.hermes/
         let default_dir = self.profiles_dir.parent().map(|p| p.to_path_buf());
         if let Some(ref dir) = default_dir {
-            if let Some(r) = Self::load_profile(dir) {
-                tracing::info!(email = %r.email, port = r.port, "Route discovered (default profile)");
-                routes.insert(r.email, r.port);
+            if let Some(r) = self.load_route(dir) {
+                tracing::info!(email = %r.email, host = %r.host, port = r.port,
+                               "Route discovered (default profile)");
+                routes.insert(r.email.clone(), r);
             }
         }
 
         tracing::info!(count = routes.len(), "Profile scan complete");
     }
 
-    fn load_profile(dir: &Path) -> Option<ProfileRoute> {
+    fn load_route(&self, dir: &Path) -> Option<ProfileRoute> {
         // Read amail.json for email
         let amail_path = dir.join("amail.json");
         let amail: serde_json::Value = serde_json::from_str(
@@ -79,12 +96,19 @@ impl ProfileRouter {
             .as_u64()
             .and_then(|p| u16::try_from(p).ok())?;
 
-        Some(ProfileRoute { email, port })
+        // Resolve host: override from config, default to 127.0.0.1
+        let host = self.host_overrides
+            .get(&email)
+            .cloned()
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+
+        Some(ProfileRoute { email, host, port })
     }
 
-    /// Look up the port for a given agent email address.
-    pub fn lookup(&self, email: &str) -> Option<u16> {
-        self.routes.read().unwrap_or_else(|e| e.into_inner()).get(email).copied()
+    /// Look up the route for a given agent email address.
+    pub fn lookup(&self, email: &str) -> Option<ProfileRoute> {
+        self.routes.read().unwrap_or_else(|e| e.into_inner())
+            .get(email).cloned()
     }
 
     pub fn route_count(&self) -> usize {

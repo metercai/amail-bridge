@@ -73,8 +73,8 @@ async fn handle_webhook(
         }
     };
 
-    let port = match state.router.lookup(&email) {
-        Some(p) => p,
+    let route = match state.router.lookup(&email) {
+        Some(r) => r,
         None => {
             tracing::warn!(email = %email, "No route found");
             return (
@@ -85,8 +85,8 @@ async fn handle_webhook(
         }
     };
 
-    let target = format!("http://127.0.0.1:{}/webhooks/amail-inbound", port);
-    tracing::debug!(email = %email, port = port, target = %target, "Forwarding webhook");
+    let target = route.target_url();
+    tracing::debug!(email = %email, host = %route.host, port = route.port, target = %target, "Forwarding webhook");
 
     // Forward only business headers — avoid leaking Host, Content-Length, etc.
     let mut fwd_headers = HeaderMap::new();

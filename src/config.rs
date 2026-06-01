@@ -1,6 +1,7 @@
 //! Bridge configuration: `amail_bridge.toml` + env var overrides.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Full bridge configuration, deserialised from `amail_bridge.toml`.
@@ -22,6 +23,11 @@ pub struct BridgeConfig {
     /// Path to the Hermes default profile (~/.hermes/). Computed at startup.
     #[serde(skip)]
     pub default_profile_dir: PathBuf,
+
+    /// Per-agent host overrides for multi-machine deployments.
+    /// email → IP or hostname. Agents not listed default to 127.0.0.1.
+    #[serde(default)]
+    pub hosts: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

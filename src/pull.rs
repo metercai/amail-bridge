@@ -77,16 +77,16 @@ pub async fn start_pull_loop(
                     }
 
                     // Look up route
-                    let port = match state.router.lookup(&d.email) {
-                        Some(p) => p,
+                    let route = match state.router.lookup(&d.email) {
+                        Some(r) => r,
                         None => {
                             tracing::warn!(email = %d.email, id = d.id, "No route — skipping");
-                            ack_ids.push(d.id); // ACK anyway to avoid accumulating unrouteable
+                            ack_ids.push(d.id);
                             continue;
                         }
                     };
 
-                    let target = format!("http://127.0.0.1:{}/webhooks/amail-inbound", port);
+                    let target = route.target_url();
 
                     // Parse headers from relay payload
                     let headers: HashMap<String, String> = match serde_json::from_str(&d.headers) {
