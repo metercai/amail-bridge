@@ -1,48 +1,116 @@
 # amail-bridge
 
-> Transparent bridge between amail relay and Hermes gateway.
+> 透明桥接 — 一个端口，所有 agent；零端口，邮件入站。
 
-amail-bridge is a lightweight Rust service that sits between an
-[amail relay](https://github.com/nousresearch/agent-mail-relay) and one or more
-[Hermes agent](https://github.com/nousresearch/hermes-agent) gateway instances,
-providing protocol bridge and network flexibility.
-
-Two operating modes:
-
-| Mode | Direction | Use when |
-|------|-----------|----------|
-| **Push** | relay → bridge → gateway | Bridge has a public IP / domain |
-| **Pull** | bridge → relay → bridge → gateway | Bridge is behind NAT / firewall |
-
-Both modes share the same zero-touch profile routing: bridge auto-discovers
-gateway webhook ports from Hermes profile directories via inotify.
+[amail relay](https://github.com/nousresearch/agent-mail-relay) 和 [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway 之间的轻量桥接服务。
+解决多 agent 部署时防火墙穿透和零依赖入站两大痛点。
 
 ---
 
-## Quickstart
+## 为什么需要 bridge
+
+**痛点 1 — 多 agent 防火墙穿透**：每个 Hermes agent 跑在各自的端口上（8645, 8646, …），
+部署到公网意味着要暴露 N 个端口、配 N 条防火墙规则。bridge 的 push 模式提供一个**单一
+入口端口**，自动路由到所有 agent，防火墙只需开一个端口。
+
+**痛点 2 — 零依赖邮件入站**：没有公网 IP？没有端口映射？pull 模式只需一条**出站 HTTP
+长轮询**，由 bridge 主动从 relay 拉邮件并转发到本地 gateway，不需要任何入站端口。
+
+---
+
+## 核心特性
+
+| 特性 | 说明 |
+|---|---|
+| **透传** | bridge 不持有、不验签 HMAC secret，relay 签名→bridge 原样转发→gateway 验签，安全边界不变 |
+| **零依赖** | 纯 Rust 单二进制，2.5 MB，不依赖 Python/Node/数据库 |
+| **轻量** | 内存占用 < 5 MB，CPU 近乎为零 |
+| **聚合** | 同一封邮件多个收件人，relay→bridge 只传一份 body（推拉均支持） |
+| **零配置** | 自动扫描 `~/.hermes/profiles/` 发现所有 agent 的路由，inotify 热更新，无需手动维护路由表 |
+| **IP 白名单** | push 模式可选白名单，只允许 relay 的 IP 访问，防 DDoS |
+| **优雅关闭** | SIGINT/SIGTERM 触发 graceful shutdown，正在处理的请求完成后再退出 |
+| **daemon 模式** | `--daemon` 双 fork 守护进程，systemd/Docker 友好 |
+
+---
+
+## 两种模式
+
+### Push — 一个端口，所有 agent
+
+```
+                       ┌─────────────────────────────────┐
+                       │         amail-bridge             │
+                       │  (单一公网端口 38080)              │
+relay ──POST──►        │                                  │
+  alice@...+bob@...    │  alice → 127.0.0.1:8645          │────► gateway:8645
+  (同一份 body)         │  bob   → 127.0.0.1:8646          │────► gateway:8646
+                       │  carol → 127.0.0.1:8647          │────► gateway:8647
+                       └─────────────────────────────────┘
+```
+
+- relay 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由到对应 gateway
+- 同一封邮件多个收件人时，relay→bridge 只传 **1 份 body**（批量聚合）
+- 支持 TLS（rustls），可选 ACME 自动证书
+
+### Pull — 零端口，邮件入站
+
+```
+relay (公网)                              NAT/防火墙内
+  │                                          │
+  │◄── POST /pending (poll 每 10s) ──────────│ bridge (出站，无需开放端口)
+  │                                          │
+  │── batches [{body, deliveries}] ─────────►│
+  │                                          │
+  │                            ┌─────────────▼──────────────────┐
+  │                            │ fan-out 到各 gateway             │
+  │                            │ ACK 已转发的 delivery            │
+  │                            └────────────────────────────────┘
+  │◄── POST /pending/ack ───────────────────│
+```
+
+- 只需要**一条出站 HTTP 连接**到 relay，完全穿透 NAT/防火墙
+- 拉模式同样支持**批量聚合**：同一封邮件的 body 只传一份
+- ACK 消费 + 去重缓存，不会丢消息也不会重复投递
+
+---
+
+## 快速开始
 
 ```bash
-# Build
-git clone https://github.com/nousresearch/amail-bridge
+git clone https://github.com/metercai/amail-bridge
 cd amail-bridge
 cargo build --release
 
-# Configure — edit amail_bridge.toml
-cp amail_bridge.toml ~/.hermes/
-$EDITOR ~/.hermes/amail_bridge.toml
+# Push 模式
+cat > amail_bridge.toml << 'EOF'
+mode = "push"
+[push]
+bind_port = 38080
+public_url = "https://bridge.example.com"
+allowed_ips = ["10.0.0.0/8"]
+EOF
 
-# Run
+# Pull 模式
+cat > amail_bridge.toml << 'EOF'
+mode = "pull"
+[pull]
+relay_url = "http://relay.example.com:38080"
+admin_key = "sk-xxxxxxxx"
+system_id = "admin"
+EOF
+
+# 运行
 ./target/release/amail-bridge
+
+# 或后台守护
+./target/release/amail-bridge --daemon
 ```
 
 ---
 
-## Configuration
+## 配置参考
 
-Bridge reads `amail_bridge.toml` from the current working directory,
-with environment variable overrides.
-
-### Push mode
+### Push
 
 ```toml
 mode = "push"
@@ -50,226 +118,93 @@ mode = "push"
 [push]
 bind_host = "0.0.0.0"
 bind_port = 38080
-tls = false                          # Set true for HTTPS
-public_url = "https://bridge.example.com"  # Printed at startup — admin copies to relay config
-
-# Static certificate (optional)
-# tls_cert = "/etc/ssl/bridge.crt"
-# tls_key  = "/etc/ssl/bridge.key"
-
-# Let's Encrypt ACME (optional, overrides static certs)
-# acme_domain = "bridge.example.com"
-# acme_cache = "~/.hermes/acme"
+tls = false
+public_url = "https://bridge.example.com"
+allowed_ips = ["10.0.0.0/8", "172.16.0.1"]   # 仅允许 relay 的 IP（可选）
 ```
 
-### Pull mode
+### Pull
 
 ```toml
 mode = "pull"
 
 [pull]
 relay_url = "http://relay.example.com:38080"
-admin_key = "sk-xxxxxxxx"            # system_admin API key from relay
+admin_key = "sk-xxxxxxxx"
 system_id = "admin"
-poll_interval_sec = 10               # Long-poll interval
+poll_interval_sec = 10
 ```
 
-### Environment variable overrides
+### 多机部署
 
-| Variable | Equivalent config field |
-|----------|------------------------|
+```toml
+[hosts]
+".*@admin.relay" = "192.168.1.2"   # 域内所有 agent 路由到这台机器
+"alice@example.com" = "10.0.0.5"   # 特定 agent 路由到指定 IP
+```
+
+### 环境变量
+
+| 变量 | 对应配置 |
+|---|---|
 | `AMAIL_BRIDGE_MODE` | `mode` |
 | `AMAIL_BRIDGE_PUBLIC_URL` | `push.public_url` |
 | `AMAIL_BRIDGE_RELAY_URL` | `pull.relay_url` |
 | `AMAIL_BRIDGE_ADMIN_KEY` | `pull.admin_key` |
 | `AMAIL_BRIDGE_SYSTEM_ID` | `pull.system_id` |
 | `AMAIL_BRIDGE_POLL_SECS` | `pull.poll_interval_sec` |
-| `HERMES_HOME` | Root Hermes directory (default: `~/.hermes`) |
+| `AMAIL_BRIDGE_ALLOWED_IPS` | `push.allowed_ips`（逗号分隔） |
+| `HERMES_HOME` | Hermes 根目录（默认 `~/.hermes`） |
 
 ---
 
-## How it works
-
-### Profile routing (auto-discovery)
-
-Bridge scans `~/.hermes/profiles/*/` + `~/.hermes/` (default profile) for:
-
-| Source file | Field | Used for |
-|-------------|-------|----------|
-| `amail.json` | `email` | Route key |
-| `config.yaml` | `.platforms.webhook.extra.port` | Forward target port |
-
-Builds a route table: `alice@admin.relay → port 8645`.
-
-Uses inotify (via the `notify` crate) to watch for profile changes — new,
-modified, or deleted profiles are picked up automatically without restart.
-
-### Push mode
-
-```
-relay                                                     gateway
-  │                                                         │
-  │  POST https://bridge.example.com/webhooks/amail-inbound  │
-  │  X-Amail-Email: alice@admin.relay                        │
-  │  X-Webhook-Signature: sha256=...                         │
-  │  {payload}                                               │
-  ▼                                                         │
-bridge ──lookup alice@admin.relay──→ port 8645               │
-  │                                                         │
-  │  POST 127.0.0.1:8645/webhooks/amail-inbound (verbatim)  │
-  │  same headers + body                                    │
-  └─────────────────────────────────────────────────────────►│
-```
-
-Bridge is a **transparent proxy**:
-- Does NOT hold webhook secrets
-- Does NOT verify or re-sign HMAC
-- Relay signs with domain secret, gateway verifies with same secret
-- Bridge just routes and forwards
-
-After startup, bridge prints the `bridge_url` to copy into relay's
-`~/.hermes/amail_relay.json`.
-
-### Pull mode
-
-```
-relay                           NAT/firewall                    gateway
-  │                                │                              │
-  │◄── GET /pending?system_id=X ───│── bridge (outbound poll)     │
-  │                                │                              │
-  │── [{id:1, email, payload}] ──►│                              │
-  │                                │                              │
-  │        ┌───────────────────────▼──────────────────────────┐   │
-  │        │ per-message: lookup email → port                  │   │
-  │        │ POST 127.0.0.1:{port}/webhooks/amail-inbound      │──►│
-  │        │ 2xx → ACK id                                      │   │
-  │        └───────────────────────────────────────────────────┘   │
-  │                                │                              │
-  │◄── POST /pending/ack {ids} ────│                              │
-  │                                │  sleep 10s → repeat          │
-```
-
-Key properties:
-- **Single outbound connection** — works behind NAT/firewall
-- **ACK-based consumption** — GET is non-destructive, POST /ack confirms
-- **Crash-safe** — un-ACKed deliveries remain pending, re-delivered next poll
-- **Dedup cache** — 2-hour TTL HashMap prevents double-forward on bridge restart
-- **Unrouteable cleanup** — if an email has no matching profile route, it's ACKed
-  to prevent accumulation
-
----
-
-## Relay-side setup
-
-### Step 1: Set delivery_mode
-
-For pull mode, set `delivery_mode = "pull"` on the domain:
-
-```bash
-curl -X PUT http://relay:38080/api/v1/admin/system-domains/$DOMAIN_ID \
-  -H "X-Api-Key: $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"delivery_mode": "pull"}'
-```
-
-For push mode (webhook — default), set `bridge_url` in relay config:
-
-```json
-// ~/.hermes/amail_relay.json
-{
-  "bridge_url": "https://bridge.example.com/webhooks/amail-inbound"
-}
-```
-
-### Step 2: Hermes integration
-
-When creating a Hermes profile, the amail integration (`amail_tools.py`)
-auto-registers the agent's email with the relay. If `bridge_url` is set in
-relay config, it's used as the webhook URL instead of `webhook_host:port`.
-
-```bash
-# Environment variable (optional)
-export AMAIL_BRIDGE_URL="https://bridge.example.com/webhooks/amail-inbound"
-```
-
----
-
-## Deployment
+## 部署
 
 ### systemd
 
 ```ini
-# /etc/systemd/system/amail-bridge.service
 [Unit]
-Description=amail-bridge — relay-gateway bridge
+Description=amail-bridge
 After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/.hermes
 ExecStart=/usr/local/bin/amail-bridge
 Restart=always
-RestartSec=5
 Environment=RUST_LOG=info
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-```bash
-sudo cp target/release/amail-bridge /usr/local/bin/
-sudo systemctl daemon-reload
-sudo systemctl enable --now amail-bridge
-```
-
 ### Docker
 
-```dockerfile
-FROM rust:1.80-slim-bookworm AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/amail-bridge /usr/local/bin/
-COPY amail_bridge.toml /etc/amail-bridge.toml
-WORKDIR /etc
-ENTRYPOINT ["/usr/local/bin/amail-bridge"]
-```
-
 ```bash
-docker build -t amail-bridge .
 docker run -d \
   -v ~/.hermes:/root/.hermes:ro \
-  -v /etc/amail-bridge.toml:/etc/amail_bridge.toml:ro \
   -p 38080:38080 \
   --name amail-bridge \
-  amail-bridge
+  ghcr.io/metercai/amail-bridge
 ```
 
 ---
 
-## Network scenarios
+## 网络场景
 
-| Scenario | Mode | Configuration |
-|----------|------|---------------|
-| Bridge on same machine as relay+gateway | Push or Pull | Use direct 127.0.0.1 URLs |
-| Bridge on LAN, relay on LAN | Push | `bind_host=0.0.0.0`, relay uses LAN IP |
-| Bridge on public VPS, relay on VPS | Push + HTTPS | `tls=true`, `public_url=https://...` |
-| Bridge behind NAT, relay on internet | Pull | Single outbound poll to relay |
-| Docker bridge + relay on host | Push or Pull | Use `host.docker.internal` or `--network=host` |
+| 场景 | 模式 | 说明 |
+|---|---|---|
+| relay+gateway 同机 | Push | bridge 单端口转发到本地各 gateway 端口 |
+| relay 在公网，gateway 在 NAT 后 | Pull | bridge 出站轮询 relay，无需开放入站端口 |
+| 公网 VPS 部署 bridge | Push + TLS | `tls=true`, `public_url=https://...` |
+| 多机 LAN 部署 | Push/Pull | `[hosts]` 配置各 agent 所在机器 IP |
 
 ---
 
-## Troubleshooting
+## 故障排查
 
-| Symptom | Check |
-|---------|-------|
-| No routes loaded | `amail.json` + `config.yaml` exist in profile dirs? |
-| Pull: no deliveries fetched | `admin_key` has `system_admin` scope? `system_id` correct? |
-| Push: 502 Bad Gateway | Gateway webhook port running? Profile has `platforms.webhook.extra.port`? |
-| Pull: stale pending > 24h | Relay logs warn — bridge may be disconnected |
-| Routes stale after profile change | Check `RUST_LOG=debug` for inotify events |
+| 现象 | 检查 |
+|---|---|
+| 无路由 | profile 目录是否有 `amail.json` + `config.yaml` |
+| pull 无数据 | `admin_key` scope 正确？`system_id` 匹配？ |
+| push 502 | gateway webhook 端口是否在监听 |
+| 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
