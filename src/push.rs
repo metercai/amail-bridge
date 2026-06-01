@@ -5,12 +5,13 @@
 //! raw body + all headers to the gateway's webhook port on localhost.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{DefaultBodyLimit, State},
+    http::{HeaderMap, HeaderName, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Router,
@@ -32,6 +33,7 @@ pub fn build_push_router(state: PushState) -> Router {
     Router::new()
         .route("/webhooks/{*name}", post(handle_webhook))
         .route("/health", get(health))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .with_state(state)
 }
 
@@ -86,10 +88,18 @@ async fn handle_webhook(
     let target = format!("http://127.0.0.1:{}/webhooks/amail-inbound", port);
     tracing::debug!(email = %email, port = port, target = %target, "Forwarding webhook");
 
+    // Forward only business headers — avoid leaking Host, Content-Length, etc.
+    let mut fwd_headers = HeaderMap::new();
+    for name in &["x-amail-email", "x-webhook-signature", "x-mailrelay-timestamp", "content-type"] {
+        if let Some(val) = headers.get(*name) {
+            fwd_headers.insert(HeaderName::from_static(name), val.clone());
+        }
+    }
+
     match state
         .http_client
         .post(&target)
-        .headers(headers)
+        .headers(fwd_headers)
         .body(body)
         .send()
         .await
@@ -119,6 +129,7 @@ async fn handle_webhook(
 pub async fn start_push_server(
     config: BridgeConfig,
     router: Arc<ProfileRouter>,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = PushState {
         router: router.clone(),
@@ -150,7 +161,19 @@ pub async fn start_push_server(
     }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    // Graceful shutdown: serve until SIGTERM
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    tracing::info!("Push server shutting down gracefully");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        })
+        .await?;
 
     Ok(())
 }

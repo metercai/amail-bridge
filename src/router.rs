@@ -76,7 +76,8 @@ impl ProfileRouter {
         )
         .ok()?;
         let port = config["platforms"]["webhook"]["extra"]["port"]
-            .as_u64()? as u16;
+            .as_u64()
+            .and_then(|p| u16::try_from(p).ok())?;
 
         Some(ProfileRoute { email, port })
     }
@@ -116,8 +117,9 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
     // Initial full scan
     router.full_scan();
 
-    // Background event loop
+    // Background event loop — owns watcher to keep it alive
     tokio::spawn(async move {
+        let _watcher = watcher; // keep alive for the lifetime of this task
         while let Ok(event) = rx.recv() {
             let should_rescan = match event.kind {
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => true,

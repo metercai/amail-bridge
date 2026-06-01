@@ -9,6 +9,7 @@ mod pull;
 mod push;
 mod router;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tracing_subscriber::EnvFilter;
@@ -34,12 +35,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(error = %e, "Profile watcher failed to start — routes may be stale");
     }
 
+    // Graceful shutdown flag
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("SIGTERM received, initiating graceful shutdown...");
+        shutdown_clone.store(true, Ordering::SeqCst);
+    });
+
     match config.mode.as_str() {
         "push" => {
-            push::start_push_server(config, router).await?;
+            push::start_push_server(config, router, shutdown).await?;
         }
         "pull" => {
-            pull::start_pull_loop(config, router).await?;
+            pull::start_pull_loop(config, router, shutdown).await?;
         }
         other => {
             eprintln!("Unknown mode: {}. Use 'push' or 'pull'.", other);

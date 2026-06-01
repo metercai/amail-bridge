@@ -4,8 +4,11 @@
 //! to the gateway webhook port, then ACKs the relay.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use urlencoding::encode;
 
 use crate::config::BridgeConfig;
 use crate::router::ProfileRouter;
@@ -22,6 +25,7 @@ pub struct PullState {
 pub async fn start_pull_loop(
     config: BridgeConfig,
     router: Arc<ProfileRouter>,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = PullState {
         router: router.clone(),
@@ -43,6 +47,12 @@ pub async fn start_pull_loop(
     );
 
     loop {
+        // Check graceful shutdown
+        if shutdown.load(Ordering::SeqCst) {
+            tracing::info!("Pull loop shutting down gracefully");
+            return Ok(());
+        }
+
         // Periodic cleanup of stale dedup entries
         seen.retain(|_, t| t.elapsed() < seen_ttl);
 
@@ -158,7 +168,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dy
     let url = format!(
         "{}/api/v1/admin/pending?system_id={}&limit=50",
         state.config.pull.relay_url.trim_end_matches('/'),
-        state.config.pull.system_id,
+        encode(&state.config.pull.system_id),
     );
 
     let resp = state
