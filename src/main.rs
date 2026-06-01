@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.validate();
     let router = Arc::new(router::ProfileRouter::new(
         &config.default_profile_dir,
-        config.hosts.clone(),
+        config.compiled_hosts(),
     ));
 
     if let Err(e) = router::start_watcher(router.clone()) {

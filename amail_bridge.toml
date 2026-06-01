@@ -4,14 +4,13 @@
 mode = "pull"  # "push" or "pull"
 
 # ── Per-agent host overrides (multi-machine LAN deployments) ──────
-# Each agent's forward target is {host}:{port}.
-# Agents NOT listed default to 127.0.0.1 (same-machine).
-# Use IPs or hostnames reachable from the bridge machine.
+# Regex pattern → IP or hostname. First match wins.
+# Agents not matching any pattern default to 127.0.0.1 (same-machine).
 #
-# [hosts]
-# "alice@admin.relay" = "192.168.1.10"
-# "bob@admin.relay"   = "192.168.1.11"
-# "carol@admin.relay" = "agent-03.local"
+[hosts]
+".*@admin.relay"    = "192.168.1.2"    # all agents on this domain → this host
+"bob@.*"            = "192.168.1.11"   # bob on any domain → this host
+"alice@admin.relay" = "192.168.1.10"   # exact match (precise overrides first)
 
 # ── Push mode (bridge receives external POSTs) ────────────────────
 [push]

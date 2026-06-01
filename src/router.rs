@@ -32,16 +32,16 @@ impl ProfileRoute {
 pub struct ProfileRouter {
     routes: RwLock<HashMap<String, ProfileRoute>>,
     profiles_dir: PathBuf,
-    /// Per-email host overrides from config (default: 127.0.0.1 if absent).
-    host_overrides: HashMap<String, String>,
+    /// Compiled regex-pattern → host overrides. First match wins.
+    host_patterns: Vec<(regex::Regex, String)>,
 }
 
 impl ProfileRouter {
-    pub fn new(hermes_home: &Path, host_overrides: HashMap<String, String>) -> Self {
+    pub fn new(hermes_home: &Path, host_patterns: Vec<(regex::Regex, String)>) -> Self {
         Self {
             routes: RwLock::new(HashMap::new()),
             profiles_dir: hermes_home.join("profiles"),
-            host_overrides,
+            host_patterns,
         }
     }
 
@@ -96,10 +96,11 @@ impl ProfileRouter {
             .as_u64()
             .and_then(|p| u16::try_from(p).ok())?;
 
-        // Resolve host: override from config, default to 127.0.0.1
-        let host = self.host_overrides
-            .get(&email)
-            .cloned()
+        // Resolve host: first regex match wins, default to 127.0.0.1
+        let host = self.host_patterns
+            .iter()
+            .find(|(re, _)| re.is_match(&email))
+            .map(|(_, h)| h.clone())
             .unwrap_or_else(|| "127.0.0.1".to_string());
 
         Some(ProfileRoute { email, host, port })

@@ -25,7 +25,8 @@ pub struct BridgeConfig {
     pub default_profile_dir: PathBuf,
 
     /// Per-agent host overrides for multi-machine deployments.
-    /// email → IP or hostname. Agents not listed default to 127.0.0.1.
+    /// Regex pattern → IP or hostname. First match wins. Unmatched default to 127.0.0.1.
+    /// Example: `".*@admin.relay" = "192.168.1.2"`
     #[serde(default)]
     pub hosts: HashMap<String, String>,
 }
@@ -135,5 +136,19 @@ impl BridgeConfig {
         if self.push.tls && self.push.bind_port == 80 {
             tracing::warn!("TLS enabled on port 80 — usually port 443 is expected");
         }
+    }
+
+    /// Compile host patterns into (Regex, host) pairs for the router.
+    /// Invalid patterns are logged and skipped. First match wins.
+    pub fn compiled_hosts(&self) -> Vec<(regex::Regex, String)> {
+        self.hosts.iter().filter_map(|(pattern, host)| {
+            match regex::Regex::new(pattern) {
+                Ok(re) => Some((re, host.clone())),
+                Err(e) => {
+                    tracing::warn!(pattern = %pattern, error = %e, "Invalid host regex — skipping");
+                    None
+                }
+            }
+        }).collect()
     }
 }
