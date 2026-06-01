@@ -2,35 +2,61 @@
 
 > 透明桥接 — 一个端口，所有 agent；零端口，邮件入站。
 
-[amail relay](https://github.com/nousresearch/agent-mail-relay) 和 [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway 之间的轻量桥接服务。
+[amail relay](https://github.com/nousresearch/agent-mail-relay) 和 [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook 端点之间的轻量桥接服务。
 解决多 agent 部署时防火墙穿透和零依赖入站两大痛点。
 
 ---
 
 ## 为什么需要 bridge
 
-**痛点 1 — 多 agent 防火墙穿透**：每个 Hermes agent 跑在各自的端口上（8645, 8646, …），
-部署到公网意味着要暴露 N 个端口、配 N 条防火墙规则。bridge 的 push 模式提供一个**单一
-入口端口**，自动路由到所有 agent，防火墙只需开一个端口。
+**痛点 1 — 多 agent 防火墙穿透**：每个 Hermes agent 的 gateway webhook 跑在各自的端口上
+（8645, 8646, …），部署到公网意味着要暴露 N 个端口、配 N 条防火墙规则。bridge 的 push 模式
+提供一个**单一入口端口**，自动路由到所有 gateway webhook 端口，防火墙只需开一个端口。
 
-**痛点 2 — 零依赖邮件入站**：没有公网 IP？没有端口映射？pull 模式只需一条**出站 HTTP
-长轮询**，由 bridge 主动从 relay 拉邮件并转发到本地 gateway，不需要任何入站端口。
+**痛点 2 — 零依赖邮件入站**：没有公网 IP？没有端口映射？pull 模式只需一条**出站 HTTP 长轮询**，
+由 bridge 主动从 relay 拉邮件并转发到本地 gateway webhook 端口，不需要任何入站端口。
 
 ---
 
 ## 核心特性
 
-| 特性 | 说明 |
-|---|---|
-| **透传** | bridge 不持有、不验签 HMAC secret，relay 签名→bridge 原样转发→gateway 验签，安全边界不变 |
-| **零依赖** | 纯 Rust 单二进制，约 3 MB，不依赖 Python/Node/数据库 |
-| **轻量** | 内存占用 < 5 MB，CPU 近乎为零 |
-| **聚合** | 同一封邮件多个收件人，relay→bridge 只传一份 body（推拉均支持） |
-| **零配置** | 自动扫描 `~/.hermes/profiles/` 发现所有 agent 的路由，inotify 热更新，无需手动维护路由表 |
-| **IP 白名单** | push 模式可选白名单，只允许 relay 的 IP 访问，防 DDoS |
-| **优雅关闭** | SIGINT/SIGTERM 触发 graceful shutdown，正在处理的请求完成后再退出 |
-| **daemon 模式** | `--daemon` 双 fork 守护进程，systemd/Docker 友好 |
-| **自动 TLS** | `tls = true` + `public_url` → 自动通过 Let's Encrypt ACME 申请证书 |
+### 安全的透明透传
+
+bridge 不持有、不验签 HMAC secret。relay 用各 agent 的 webhook secret 签名 →
+bridge 原样转发 headers 和 body → gateway 验签。安全边界不变。push 模式支持
+IP 白名单；pull 模式使用 ACK 消费 + 去重缓存，杜绝消息丢失和重复投递。
+
+### 轻量零依赖进程
+
+纯 Rust 单二进制，约 3 MB。内存 < 5 MB，CPU 近乎为零。不依赖 Python/Node/数据库。
+`--daemon` 双 fork 守护进程，systemd/Docker 原生支持。SIGINT/SIGTERM 优雅排空。
+
+### 高效的聚合转发
+
+同一封邮件多个收件人在同一 bridge 后面时，relay→bridge 只传 **一份 body** + 每人
+各自的 headers，bridge 再 fan-out 到各 gateway webhook 端口。推拉模式均支持。
+
+### 正则匹配的多机转发
+
+`[hosts]` 表以正则匹配 agent 邮箱 → 主机 IP，首匹配即胜，未匹配默认 `127.0.0.1`。
+从 Hermes profiles 自动发现，可手动 routes TOML 文件覆盖。
+
+### 多维度的安全加固
+
+- **IP 白名单** — push 模式只接受受信 relay IP 的 POST
+- **Body 大小限制** — 10 MB 上限防内存耗尽
+- **优雅关闭** — SIGINT/SIGTERM 排空进行中请求后退出
+- **Poison 锁恢复** — 所有锁路径 `unwrap_or_else` 恢复
+- **Header 过滤** — 只转发业务 header（x-amail-email / x-webhook-signature / x-mailrelay-timestamp / content-type）
+- **TLS** — rustls HTTPS，可选 Let's Encrypt ACME 自动证书
+
+### 多项自动化配置
+
+- **零配置路由** — 自动扫描 `~/.hermes/profiles/` 发现 agent webhook 端口，inotify 热更新
+- **ACME 自动 TLS** — `tls = true` + `public_url` → 自动向 Let's Encrypt 申请证书
+  （HTTP-01 挑战），缓存复用，自动续期
+- **批量聚合** — relay 自动按 bridge URL 和 payload hash 分组，最小化 HTTP 往返次数和带宽
+- **守护进程** — `--daemon` 双 fork，PID 文件、日志文件，无需人工看管
 
 ---
 
@@ -43,13 +69,13 @@
                        │         amail-bridge             │
                        │  (单一公网端口 38080)              │
 relay ──POST──►        │                                  │
-  alice@...+bob@...    │  alice → 127.0.0.1:8645          │────► gateway:8645
-  (同一份 body)         │  bob   → 127.0.0.1:8646          │────► gateway:8646
-                       │  carol → 127.0.0.1:8647          │────► gateway:8647
+  alice@...+bob@...    │  alice → 127.0.0.1:8645          │────► gateway webhook:8645
+  (同一份 body)         │  bob   → 127.0.0.1:8646          │────► gateway webhook:8646
+                       │  carol → 127.0.0.1:8647          │────► gateway webhook:8647
                        └─────────────────────────────────┘
 ```
 
-- relay 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由到对应 gateway
+- relay 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由到对应 gateway webhook 端口
 - 同一封邮件多个收件人时，relay→bridge 只传 **1 份 body**（批量聚合）
 - 支持 TLS（rustls），可选自动 Let's Encrypt 证书
 
@@ -63,7 +89,7 @@ relay (公网)                              NAT/防火墙内
   │── batches [{body, deliveries}] ─────────►│
   │                                          │
   │                            ┌─────────────▼──────────────────┐
-  │                            │ fan-out 到各 gateway             │
+  │                            │ fan-out 到各 gateway webhook     │
   │                            │ ACK 已转发的 delivery            │
   │                            └────────────────────────────────┘
   │◄── POST /pending/ack ───────────────────│
@@ -71,7 +97,7 @@ relay (公网)                              NAT/防火墙内
 
 - 只需要**一条出站 HTTP 连接**到 relay，完全穿透 NAT/防火墙
 - 拉模式同样支持**批量聚合**：同一封邮件的 body 只传一份
-- ACK 消费 + 去重缓存，不会丢消息也不会重复投递
+- ACK 消费 + 2 小时去重缓存，不会丢消息也不会重复投递
 
 ---
 
@@ -168,7 +194,8 @@ poll_interval_sec = 10
 
 ## TLS 与 ACME
 
-当 `tls = true` 且 `public_url` 已设置时，bridge 自动向 Let's Encrypt 申请证书：
+当 `tls = true` 且 `public_url` 已设置时，bridge 自动通过 HTTP-01 挑战向
+Let's Encrypt 申请证书：
 
 ```
 启动流程
@@ -184,6 +211,18 @@ poll_interval_sec = 10
 - 证书有效期 90 天，签发约 60 天后自动续期（每 12 小时检查一次）
 - ACME 功能默认编译进二进制（编译时需要 OpenSSL 开发库）
 - 不需要 TLS 时编译：`cargo build --no-default-features`
+
+### 挑战方式
+
+当前仅支持 **HTTP-01**。bridge 临时监听 80 端口提供 `.well-known/acme-challenge/` token。
+**前提条件**：
+
+- 域名 DNS 必须解析到 bridge 的公网 IP
+- 80 端口必须公网可达（防火墙 / 安全组放行）
+- 80 端口不能被其他进程占用（nginx/Apache）
+
+**DNS-01**（通过 DNS TXT 记录验证）尚未实现。如果部署环境无法暴露 80 端口，
+请使用静态证书（`tls_cert` / `tls_key`），或在 bridge 前放置反向代理。
 
 ---
 
@@ -225,7 +264,7 @@ docker run -d \
 
 | 场景 | 模式 | 说明 |
 |---|---|---|
-| relay+gateway 同机 | Push | bridge 单端口转发到本地各 gateway 端口 |
+| relay+gateway 同机 | Push | bridge 单端口转发到本地各 gateway webhook 端口 |
 | relay 在公网，gateway 在 NAT 后 | Pull | bridge 出站轮询 relay，无需开放入站端口 |
 | 公网 VPS 部署 bridge | Push + TLS | `tls=true`, `public_url=https://...`，ACME 自动证书 |
 | 多机 LAN 部署 | Push/Pull | `[hosts]` 配置各 agent 所在机器 IP |
@@ -241,3 +280,4 @@ docker run -d \
 | push 502 | gateway webhook 端口是否在监听 |
 | 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
 | ACME 回退到 HTTP | 域名是否解析到 bridge？80 端口公网可达？`RUST_LOG=info` 查看 ACME 错误 |
+| 需要 DNS-01 | 改用静态证书或在 bridge 前放置反向代理 |

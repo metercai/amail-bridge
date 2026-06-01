@@ -3,7 +3,7 @@
 > Transparent bridge — one port, all agents; zero ports, email inbound.
 
 A lightweight bridge between [amail relay](https://github.com/nousresearch/agent-mail-relay)
-and [Hermes agent](https://github.com/nousresearch/hermes-agent) gateways.
+and [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook endpoints.
 Solves firewall penetration for multi-agent deployments and zero-dependency email
 inbound.
 
@@ -11,30 +11,65 @@ inbound.
 
 ## Why bridge
 
-**Pain 1 — Multi-agent firewall penetration**: Each Hermes agent runs on its own
-port (8645, 8646, …). Exposing them to the internet means N ports, N firewall
-rules. Bridge's push mode provides a **single entry port** that auto-routes to
-all agents — open just one port.
+**Pain 1 — Multi-agent firewall penetration**: Each Hermes agent's gateway webhook
+runs on its own port (8645, 8646, …). Exposing them to the internet means N ports,
+N firewall rules. Bridge's push mode provides a **single entry port** that
+auto-routes to all gateway webhook ports — open just one port.
 
 **Pain 2 — Zero-dependency email inbound**: No public IP? No port forwarding?
 Pull mode uses a single **outbound HTTP long-poll** — bridge actively fetches
-mail from relay and forwards to local gateways. Zero inbound ports required.
+mail from relay and forwards to local gateway webhook ports. Zero inbound ports
+required.
 
 ---
 
 ## Key features
 
-| Feature | Description |
-|---|---|
-| **Transparent** | Bridge holds no HMAC secrets. Relay signs → bridge forwards verbatim → gateway verifies. Security boundary unchanged. |
-| **Zero dependency** | Pure Rust, single binary ~3 MB. No Python, Node, or database required. |
-| **Lightweight** | < 5 MB memory, near-zero CPU at idle. |
-| **Aggregation** | One email, multiple recipients — relay sends a single body copy (push & pull). |
-| **Zero config** | Auto-discovers agent routes from `~/.hermes/profiles/` via inotify. No manual route table. |
-| **IP allowlist** | Optional push-mode allowlist — only relay IPs can POST, DDoS hardened. |
-| **Graceful shutdown** | SIGINT / SIGTERM trigger graceful drain, in-flight requests complete. |
-| **Daemon mode** | `--daemon` double-fork, systemd / Docker friendly. |
-| **Auto TLS** | `tls = true` + `public_url` → automatic Let's Encrypt certificate via ACME HTTP-01. |
+### Secure transparent pass-through
+
+Bridge holds no HMAC secrets. Relay signs with each agent's webhook secret →
+bridge forwards headers & body verbatim → gateway verifies. Security boundary
+unchanged. Push mode supports IP allowlist; pull mode uses ACK-based consumption
+with dedup to prevent message loss.
+
+### Lightweight zero-dependency process
+
+Pure Rust, single binary ~3 MB. < 5 MB memory, near-zero CPU at idle.
+No Python, Node, or database required. `--daemon` double-fork daemon mode
+for systemd/Docker deployment. SIGINT/SIGTERM graceful drain.
+
+### Efficient aggregated forwarding
+
+When one email reaches multiple recipients under the same bridge, the relay
+sends a **single body copy** with per-recipient headers — then bridge fans out
+to each gateway webhook port. Works for both push and pull modes.
+
+### Regex-based multi-machine forwarding
+
+`[hosts]` table maps agent email patterns (regex) to host IPs. First-match-wins,
+unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles,
+overridable via a manual routes TOML file.
+
+### Multi-dimensional security hardening
+
+- **IP allowlist** — push mode only accepts POSTs from trusted relay IPs
+- **Body size limit** — 10 MB cap prevents memory exhaustion
+- **Graceful shutdown** — SIGINT/SIGTERM drain in-flight requests
+- **Poisoned lock recovery** — `RwLock` unwrap-or-recover on all paths
+- **Header filtering** — only business headers forwarded (x-amail-email,
+  x-webhook-signature, x-mailrelay-timestamp, content-type)
+- **TLS** — rustls-backed HTTPS with optional Let's Encrypt ACME auto-cert
+
+### Multiple automation features
+
+- **Zero-config routing** — auto-scans `~/.hermes/profiles/` for agent webhook
+  ports via inotify hot-reload
+- **ACME auto-TLS** — `tls = true` + `public_url` → automatic certificate from
+  Let's Encrypt (HTTP-01 challenge). Cached, auto-renewed.
+- **Batch aggregation** — relay automatically groups recipients by bridge URL
+  and payload hash to minimize HTTP round-trips and bandwidth
+- **Daemon mode** — `--daemon` double-fork, PID file, log file, zero manual
+  supervision needed
 
 ---
 
@@ -47,9 +82,9 @@ mail from relay and forwards to local gateways. Zero inbound ports required.
                        │         amail-bridge             │
                        │  (single public port 38080)       │
 relay ──POST──►        │                                  │
-  alice@...+bob@...    │  alice → 127.0.0.1:8645          │────► gateway:8645
-  (one body copy)      │  bob   → 127.0.0.1:8646          │────► gateway:8646
-                       │  carol → 127.0.0.1:8647          │────► gateway:8647
+  alice@...+bob@...    │  alice → 127.0.0.1:8645          │────► gateway webhook:8645
+  (one body copy)      │  bob   → 127.0.0.1:8646          │────► gateway webhook:8646
+                       │  carol → 127.0.0.1:8647          │────► gateway webhook:8647
                        └─────────────────────────────────┘
 ```
 
@@ -67,7 +102,7 @@ relay (public)                               behind NAT/firewall
   │── batches [{body, deliveries}] ──────────────►│
   │                                               │
   │                                 ┌─────────────▼──────────────────┐
-  │                                 │ fan-out to each gateway          │
+  │                                 │ fan-out to each gateway webhook  │
   │                                 │ ACK forwarded deliveries         │
   │                                 └────────────────────────────────┘
   │◄── POST /pending/ack ─────────────────────────│
@@ -75,7 +110,7 @@ relay (public)                               behind NAT/firewall
 
 - Single **outbound HTTP connection** to relay, fully bypasses NAT/firewall
 - Same batch aggregation: one body copy for all recipients
-- ACK-based consumption + dedup cache — no messages lost, no duplicates
+- ACK-based consumption + 2-hour dedup cache — no messages lost, no duplicates
 
 ---
 
@@ -173,7 +208,7 @@ poll_interval_sec = 10
 ## TLS & ACME
 
 When `tls = true` and `public_url` is set, bridge automatically requests a
-certificate from Let's Encrypt:
+certificate from Let's Encrypt via HTTP-01 challenge:
 
 ```
 Startup
@@ -189,6 +224,19 @@ Startup
 - Certificates auto-renew ~60 days after issuance (checks every 12 hours)
 - ACME is compiled in by default (requires OpenSSL at build time)
 - Disable TLS at compile time: `cargo build --no-default-features`
+
+### Challenge method
+
+Currently only **HTTP-01** is supported. The bridge temporarily binds port 80
+to serve the `.well-known/acme-challenge/` token. **Prerequisites**:
+
+- The domain's DNS must resolve to the bridge's public IP
+- Port 80 must be reachable from the internet (firewall / security group)
+- No other process (nginx, Apache) may be using port 80 during challenge
+
+**DNS-01** (certificate via DNS TXT record) is not yet implemented. If your
+deployment cannot expose port 80, use static certificates (`tls_cert` / `tls_key`)
+or run a reverse proxy in front of the bridge.
 
 ---
 
@@ -230,7 +278,7 @@ docker run -d \
 
 | Scenario | Mode | Notes |
 |---|---|---|
-| relay + gateway on same machine | Push | Bridge proxies single port to local gateways |
+| relay + gateway on same machine | Push | Bridge proxies single port to local gateway webhook ports |
 | relay public, gateway behind NAT | Pull | Bridge polls relay outbound, no inbound ports |
 | Bridge on public VPS | Push + TLS | `tls=true`, `public_url=https://...`, ACME auto-cert |
 | Multi-machine LAN | Push/Pull | `[hosts]` maps agent emails to machine IPs |
@@ -245,4 +293,5 @@ docker run -d \
 | Pull: no deliveries | `admin_key` scope correct? `system_id` matches? |
 | Push: 502 | Gateway webhook port listening? |
 | Routes stale | `RUST_LOG=debug` to see inotify events |
-| ACME: fallback to HTTP | Domain resolves to bridge? Port 80 reachable from internet? Check `RUST_LOG=info` for ACME errors |
+| ACME: fallback to HTTP | Domain resolves to bridge? Port 80 reachable? `RUST_LOG=info` for ACME errors |
+| ACME: DNS-01 needed | Use static certs or reverse proxy in front of bridge |
