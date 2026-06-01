@@ -35,7 +35,7 @@ pub async fn start_pull_loop(
 
     let mut seen: HashMap<i64, Instant> = HashMap::new();
     let seen_ttl = Duration::from_secs(7200);
-    let mut backoff_secs = config.pull.poll_interval_sec;
+    let poll_interval = config.pull.poll_interval_sec;
     let mut consecutive_failures: u32 = 0;
     const MAX_BACKOFF: u64 = 300; // 5 min
 
@@ -56,13 +56,13 @@ pub async fn start_pull_loop(
         // Periodic cleanup of stale dedup entries
         seen.retain(|_, t| t.elapsed() < seen_ttl);
 
-        match fetch_pending(&state).await {
+        let sleep_secs = match fetch_pending(&state).await {
             Ok(deliveries) => {
                 consecutive_failures = 0;
-                backoff_secs = config.pull.poll_interval_sec;
                 if !deliveries.is_empty() {
                     tracing::info!(count = deliveries.len(), "Fetched pending deliveries");
                 }
+                // ... process deliveries (same as before, just no backoff_secs assignment)
                 let mut ack_ids: Vec<i64> = Vec::new();
                 for d in &deliveries {
                     // Dedup: skip already-forwarded deliveries
@@ -74,12 +74,13 @@ pub async fn start_pull_loop(
                         }
                     }
 
-                    // Look up route
+                    // Look up route — do NOT ACK if route is missing.
+                    // Routes may be temporarily empty during a rescan; the relay
+                    // should have its own cron cleanup for stale pending deliveries.
                     let route = match state.router.lookup(&d.email) {
                         Some(r) => r,
                         None => {
-                            tracing::warn!(email = %d.email, id = d.id, "No route — skipping");
-                            ack_ids.push(d.id);
+                            tracing::warn!(email = %d.email, id = d.id, "No route — skipping (will retry)");
                             continue;
                         }
                     };
@@ -144,23 +145,23 @@ pub async fn start_pull_loop(
                     }
                 }
 
-                // Cleanup delivered entries from dedup cache
-                seen.retain(|_, t| t.elapsed() < seen_ttl);
+                poll_interval
             }
             Err(e) => {
                 consecutive_failures += 1;
-                backoff_secs = (config.pull.poll_interval_sec * 2_u64.pow(consecutive_failures.min(6)))
+                let bs = (poll_interval * 2_u64.pow(consecutive_failures.min(6)))
                     .min(MAX_BACKOFF);
                 tracing::error!(
                     error = %e,
                     consecutive_failures,
-                    backoff_secs,
+                    backoff_secs = bs,
                     "Pull fetch failed — backing off"
                 );
+                bs
             }
-        }
+        };
 
-        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
     }
 }
 
@@ -173,9 +174,12 @@ struct PendingDelivery {
     payload: String, // JSON object string
 }
 
-/// Fetch pending deliveries from relay.
+/// Fetch pending deliveries from relay.  Returns empty vec if no known emails.
 async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dyn std::error::Error>> {
     let emails: Vec<String> = state.router.list_emails();
+    if emails.is_empty() {
+        return Ok(Vec::new());
+    }
     let url = format!(
         "{}/api/v1/admin/pending",
         state.config.pull.relay_url.trim_end_matches('/'),

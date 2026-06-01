@@ -50,16 +50,23 @@ impl ProfileRouter {
         let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
         routes.clear();
 
-        // Step 1: auto-discover from profiles
+        // Step 1: auto-discover from named profiles under ~/.hermes/profiles/
         self.scan_profile_dir(&mut routes, &self.profiles_dir);
-        if let Some(default_dir) = self.profiles_dir.parent().map(|p| p.to_path_buf()) {
-            self.scan_profile_dir(&mut routes, &default_dir);
+
+        // Step 2: default profile — ~/.hermes/ itself is a profile directory
+        // (contains amail.json + config.yaml).  load_route() handles file-not-found.
+        if let Some(default_dir) = self.profiles_dir.parent() {
+            if let Some(r) = self.load_route(default_dir) {
+                tracing::info!(email = %r.email, host = %r.host, port = r.port,
+                               "Default profile route discovered");
+                routes.insert(r.email.clone(), r);
+            }
         }
 
-        // Step 2: merge manual overrides from routes file
+        // Step 3: merge manual overrides from routes file
         self.merge_routes_file(&mut routes);
 
-        // Step 3: write the merged result back for visibility
+        // Step 4: write the merged result back for visibility
         self.write_routes_file();
 
         tracing::info!(count = routes.len(), "Profile scan complete");
@@ -138,9 +145,21 @@ impl ProfileRouter {
             &std::fs::read_to_string(&config_path).ok()?,
         )
         .ok()?;
-        let port = config["platforms"]["webhook"]["extra"]["port"]
-            .as_u64()
-            .and_then(|p| u16::try_from(p).ok())?;
+        let port = match config["platforms"]["webhook"]["extra"]["port"].as_u64() {
+            Some(p) => match u16::try_from(p) {
+                Ok(port) => port,
+                Err(_) => {
+                    tracing::warn!(port = p, email = %email, dir = %dir.display(),
+                        "Webhook port out of u16 range — skipping profile");
+                    return None;
+                }
+            },
+            None => {
+                tracing::warn!(email = %email, dir = %dir.display(),
+                    "No webhook port in config.yaml — skipping profile");
+                return None;
+            }
+        };
 
         // Resolve host: first regex match wins, default to 127.0.0.1
         let host = self.host_patterns

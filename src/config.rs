@@ -1,7 +1,6 @@
 //! Bridge configuration: `amail_bridge.toml` + env var overrides.
 
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Full bridge configuration, deserialised from `amail_bridge.toml`.
@@ -25,13 +24,37 @@ pub struct BridgeConfig {
     pub default_profile_dir: PathBuf,
 
     /// Per-agent host overrides for multi-machine deployments.
-    /// Regex pattern → IP or hostname. First match wins. Unmatched default to 127.0.0.1.
+    /// Regex pattern → IP or hostname. First match wins (insertion order).
     /// Example: `".*@admin.relay" = "192.168.1.2"`
-    #[serde(default)]
-    pub hosts: HashMap<String, String>,
+    #[serde(default, deserialize_with = "deserialize_hosts_vec")]
+    pub hosts: Vec<(String, String)>,
+}
+
+/// Custom deserializer: reads a TOML table into a Vec, preserving insertion order.
+/// Required because `HashMap<String, String>` does NOT preserve order;
+/// the user-written TOML order is the intended "first match wins" priority.
+fn deserialize_hosts_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(String, String)>, D::Error> {
+    use serde::de::{MapAccess, Visitor};
+    use std::fmt;
+    struct MapToVec;
+    impl<'de> Visitor<'de> for MapToVec {
+        type Value = Vec<(String, String)>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a TOML table of host regex → ip/hostname pairs")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut v = Vec::new();
+            while let Some((k, val)) = map.next_entry::<String, String>()? {
+                v.push((k, val));
+            }
+            Ok(v)
+        }
+    }
+    d.deserialize_map(MapToVec)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
 pub struct PushConfig {
     #[serde(default = "default_bind_host")]
     pub bind_host: String,
@@ -53,6 +76,10 @@ pub struct PushConfig {
     pub acme_cache: Option<PathBuf>,
     #[serde(default)]
     pub redirect_http: bool,
+    /// Per-IP rate limit for DDoS protection.  None = disabled.
+    /// Typical production value: 20–50 requests per second per IP.
+    #[serde(default)]
+    pub max_requests_per_sec: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +130,9 @@ impl BridgeConfig {
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_POLL_SECS") {
             cfg.pull.poll_interval_sec = v.parse().unwrap_or(10);
+        }
+        if let Ok(v) = std::env::var("AMAIL_BRIDGE_MAX_RPS") {
+            cfg.push.max_requests_per_sec = v.parse().ok();
         }
         if let Ok(v) = std::env::var("HERMES_HOME") {
             cfg.hermes_home = Some(PathBuf::from(v));

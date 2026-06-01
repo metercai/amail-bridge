@@ -192,8 +192,24 @@ async fn async_main(
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        tracing::info!("SIGINT received, initiating graceful shutdown...");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = async {
+                #[cfg(unix)]
+                {
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                        Ok(mut sigterm) => sigterm.recv().await,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "SIGTERM handler unavailable — falling back to SIGINT only");
+                            Some(std::future::pending::<()>().await)
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                std::future::pending::<()>().await;
+            } => {},
+        }
+        tracing::info!("shutdown signal received, initiating graceful shutdown...");
         shutdown_clone.store(true, Ordering::SeqCst);
     });
 

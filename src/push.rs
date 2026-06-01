@@ -3,19 +3,26 @@
 //! Receives POSTs from relay at a single stable endpoint, looks up
 //! the target agent via the X-Amail-Email header, and forwards the
 //! raw body + all headers to the gateway's webhook port on localhost.
+//!
+//! Optional per-IP rate limiting for DDoS protection — configure
+//! `push.max_requests_per_sec` in amail_bridge.toml.
 
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, HeaderName, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{get, post},
     Router,
 };
+
 
 use crate::config::BridgeConfig;
 use crate::router::ProfileRouter;
@@ -28,13 +35,71 @@ pub struct PushState {
     pub config: BridgeConfig,
 }
 
+/// Per-IP sliding-window rate limiter.
+/// Window: 1 second.  If `max_per_sec` is exceeded the request gets 429.
+#[derive(Clone)]
+pub struct RateLimiter {
+    inner: Arc<Mutex<HashMap<IpAddr, (Instant, u32)>>>,
+    max_per_sec: u32,
+}
+
+impl RateLimiter {
+    pub fn new(max_per_sec: u32) -> Self {
+        Self { inner: Arc::new(Mutex::new(HashMap::new())), max_per_sec }
+    }
+
+    /// Returns `true` if the request is allowed, `false` if throttled.
+    pub fn check(&self, ip: IpAddr) -> bool {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        let window_start = now - Duration::from_secs(1);
+
+        // Cleanup stale entries inline (cheap for typical deployment sizes)
+        map.retain(|_, (last, _)| *last >= window_start);
+
+        let entry = map.entry(ip).or_insert((now, 0));
+        if entry.0 < window_start {
+            *entry = (now, 1);
+            true
+        } else if entry.1 < self.max_per_sec {
+            entry.0 = now;
+            entry.1 += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Build the axum Router for push mode.
 pub fn build_push_router(state: PushState) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/webhooks/{*name}", post(handle_webhook))
         .route("/health", get(health))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
-        .with_state(state)
+        .with_state(state.clone());
+
+    if let Some(max_rps) = state.config.push.max_requests_per_sec {
+        let limiter = RateLimiter::new(max_rps);
+        router = router.layer(middleware::from_fn_with_state(limiter, rate_limit));
+        tracing::info!(max_rps, "Per-IP rate limiting enabled");
+    }
+
+    router
+}
+
+/// Axum middleware: reject requests exceeding per-IP rate limit (429).
+async fn rate_limit(
+    State(limiter): State<RateLimiter>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::http::Response<axum::body::Body>, StatusCode> {
+    if limiter.check(addr.ip()) {
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::TOO_MANY_REQUESTS)
+    }
 }
 
 /// Health check — also prints route count.
@@ -183,15 +248,18 @@ pub async fn start_push_server(
         });
         axum_server::bind_rustls(addr, tls_config)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
         return Ok(());
     }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
     Ok(())
 }
