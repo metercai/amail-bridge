@@ -243,46 +243,8 @@ prerequisites are met:
 That's it. No configuration beyond `tls = true` + `public_url`. The bridge will
 automatically request the certificate, save it, and renew it.
 
-#### DNS-01 (not yet implemented)
-
-DNS-01 proves domain ownership by creating a `_acme-challenge` TXT record
-in your DNS zone instead of serving an HTTP endpoint. How it would work:
-
-1. Bridge contacts Let's Encrypt and receives a challenge token
-2. Bridge calls your DNS provider's API to create:
-   ```
-   _acme-challenge.bridge.example.com   TXT   "<token>"
-   ```
-3. Let's Encrypt queries the TXT record to verify ownership
-4. Certificate is issued; bridge cleans up the TXT record
-
-**What you would need to configure** (not implemented):
-
-```toml
-[push]
-tls = true
-public_url = "https://bridge.example.com"
-acme_challenge = "dns"            # "http" (default) or "dns"
-
-[push.dns]
-provider = "cloudflare"           # cloudflare / route53 / manual
-api_token = "..."                 # provider-specific credentials
-# zone_id = "..."                 # for Route53
-```
-
-For providers without API access, a `manual` mode would print the TXT record
-value and wait for you to create it:
-
-```
-$ amail-bridge
-ACME DNS-01 challenge — add this TXT record to your DNS:
-  _acme-challenge.bridge.example.com   TXT   "abc123def456"
-Press Enter after creating the record...
-```
-
-**Workaround today**: if port 80 is unavailable, use static certificates
-(`tls_cert` / `tls_key`) or put nginx/Caddy in front of the bridge to handle
-ACME.
+If these prerequisites cannot be met (e.g. port 80 is blocked), the bridge
+falls back to plain HTTP with a warning.
 
 ---
 
@@ -340,4 +302,3 @@ docker run -d \
 | Push: 502 | Gateway webhook port listening? |
 | Routes stale | `RUST_LOG=debug` to see inotify events |
 | ACME: fallback to HTTP | Domain resolves to bridge? Port 80 reachable? `RUST_LOG=info` for ACME errors |
-| ACME: DNS-01 needed | Use static certs or reverse proxy in front of bridge |

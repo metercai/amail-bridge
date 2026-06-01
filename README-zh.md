@@ -229,44 +229,7 @@ bridge 全自动处理，用户只需确保以下前提条件：
 无需额外配置，只要 `tls = true` + `public_url` 即可。bridge 自动申请证书、
 保存、续期。
 
-#### DNS-01（尚未实现）
-
-DNS-01 通过在 DNS 中创建 `_acme-challenge` TXT 记录来证明域名所有权，
-不依赖 80 端口。实现后工作流程：
-
-1. bridge 向 Let's Encrypt 发起挑战，获得 token
-2. bridge 调用你的 DNS 服务商 API 创建记录：
-   ```
-   _acme-challenge.bridge.example.com   TXT   "<token>"
-   ```
-3. Let's Encrypt 查询 TXT 记录验证所有权
-4. 证书签发，bridge 清理 TXT 记录
-
-**预计需要配置**（未实现）：
-
-```toml
-[push]
-tls = true
-public_url = "https://bridge.example.com"
-acme_challenge = "dns"            # "http"（默认）或 "dns"
-
-[push.dns]
-provider = "cloudflare"           # cloudflare / route53 / manual
-api_token = "..."                 # 服务商 API 凭证
-# zone_id = "..."                 # Route53 需要
-```
-
-对于没有 API 的 DNS 服务商，`manual` 模式会打印 TXT 记录值，等用户手动创建后回车继续：
-
-```
-$ amail-bridge
-ACME DNS-01 挑战 — 请在 DNS 中添加以下 TXT 记录：
-  _acme-challenge.bridge.example.com   TXT   "abc123def456"
-创建完成后按回车继续...
-```
-
-**当前替代方案**：如果无法开放 80 端口，使用静态证书（`tls_cert` / `tls_key`），
-或在 bridge 前放置 nginx / Caddy 处理 ACME。
+如果以上条件无法满足（如 80 端口被封），bridge 会自动回退到 HTTP，同时输出警告。
 
 ---
 
@@ -324,4 +287,3 @@ docker run -d \
 | push 502 | gateway webhook 端口是否在监听 |
 | 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
 | ACME 回退到 HTTP | 域名是否解析到 bridge？80 端口公网可达？`RUST_LOG=info` 查看 ACME 错误 |
-| 需要 DNS-01 | 改用静态证书或在 bridge 前放置反向代理 |
