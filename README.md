@@ -50,7 +50,7 @@ relay ──POST──►        │                                  │
 
 - relay 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由到对应 gateway
 - 同一封邮件多个收件人时，relay→bridge 只传 **1 份 body**（批量聚合）
-- 支持 TLS（rustls），可选 ACME 自动证书
+- 支持 TLS（rustls）
 
 ### Pull — 零端口，邮件入站
 

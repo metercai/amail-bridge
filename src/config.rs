@@ -71,8 +71,6 @@ pub struct PushConfig {
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
     #[serde(default)]
-    pub acme_domain: Option<String>,
-    #[serde(default)]
     pub acme_cache: Option<PathBuf>,
     #[serde(default)]
     pub redirect_http: bool,
