@@ -227,24 +227,62 @@ Startup
 
 ### Challenge method
 
-Currently only **HTTP-01** is supported — the bridge temporarily binds port 80
-to serve the `.well-known/acme-challenge/` token. This requires:
+#### HTTP-01 (implemented)
 
-- The domain's DNS must resolve to the bridge's public IP
-- Port 80 must be reachable from the internet (firewall / security group)
-- No other process (nginx, Apache) may be using port 80 during challenge
+Bridge handles everything automatically. You only need to ensure these
+prerequisites are met:
 
-**DNS-01** (domain validation via a DNS TXT record) is not yet implemented.
-DNS-01 would eliminate the port 80 requirement by proving domain ownership
-through a `_acme-challenge` TXT record instead of an HTTP endpoint. This is
-useful when:
+1. **DNS**: the domain in `public_url` resolves to the bridge's IP
+   ```bash
+   dig bridge.example.com   # must return the bridge server's public IP
+   ```
+2. **Firewall**: port 80 is open inbound (TCP) on the bridge server
+3. **Port 80 free**: no nginx, Apache, or other process listening on port 80
+   (bridge binds it temporarily during challenge, then releases it)
 
-- The bridge runs behind a reverse proxy or CDN (Cloudflare, etc.)
-- Port 80 is blocked or already occupied
-- You want end-to-end HTTPS without an intermediate HTTP listener
+That's it. No configuration beyond `tls = true` + `public_url`. The bridge will
+automatically request the certificate, save it, and renew it.
 
-If your deployment requires DNS-01, use static certificates (`tls_cert` /
-`tls_key`) or run nginx / Caddy in front of the bridge to handle ACME.
+#### DNS-01 (not yet implemented)
+
+DNS-01 proves domain ownership by creating a `_acme-challenge` TXT record
+in your DNS zone instead of serving an HTTP endpoint. How it would work:
+
+1. Bridge contacts Let's Encrypt and receives a challenge token
+2. Bridge calls your DNS provider's API to create:
+   ```
+   _acme-challenge.bridge.example.com   TXT   "<token>"
+   ```
+3. Let's Encrypt queries the TXT record to verify ownership
+4. Certificate is issued; bridge cleans up the TXT record
+
+**What you would need to configure** (not implemented):
+
+```toml
+[push]
+tls = true
+public_url = "https://bridge.example.com"
+acme_challenge = "dns"            # "http" (default) or "dns"
+
+[push.dns]
+provider = "cloudflare"           # cloudflare / route53 / manual
+api_token = "..."                 # provider-specific credentials
+# zone_id = "..."                 # for Route53
+```
+
+For providers without API access, a `manual` mode would print the TXT record
+value and wait for you to create it:
+
+```
+$ amail-bridge
+ACME DNS-01 challenge — add this TXT record to your DNS:
+  _acme-challenge.bridge.example.com   TXT   "abc123def456"
+Press Enter after creating the record...
+```
+
+**Workaround today**: if port 80 is unavailable, use static certificates
+(`tls_cert` / `tls_key`) or put nginx/Caddy in front of the bridge to handle
+ACME.
 
 ---
 
