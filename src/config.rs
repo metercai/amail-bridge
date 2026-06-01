@@ -137,6 +137,21 @@ impl BridgeConfig {
             cfg.hermes_home = Some(PathBuf::from(v));
         }
 
+        // Push/pull are mutually exclusive — push wins because it has
+        // lower latency and better efficiency when a public IP is available.
+        // A configured push section (public_url, tls_cert, or non-default
+        // bind_port) overrides an explicit pull mode.
+        let push_configured = !cfg.push.public_url.is_empty()
+            || cfg.push.tls_cert.is_some()
+            || cfg.push.tls_key.is_some();
+        if cfg.mode == "pull" && push_configured {
+            tracing::warn!(
+                "Push config detected (public_url/tls_cert) but mode is 'pull' — \
+                 push has lower latency, switching to push mode"
+            );
+            cfg.mode = "push".to_string();
+        }
+
         // Default profile dir
         let hermes_root = cfg.hermes_home.clone().unwrap_or_else(|| {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".hermes")
