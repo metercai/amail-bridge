@@ -147,6 +147,12 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // ── Batch mode (X-Batch header) ─────────────────────────────
+    if headers.get("x-batch").and_then(|v| v.to_str().ok()) == Some("1") {
+        return handle_batch_webhook(axum::extract::State(state), body).await;
+    }
+
+    // ── Single mode (legacy) ────────────────────────────────────
     // Resolve target from X-Amail-Email header
     let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
@@ -283,6 +289,80 @@ pub async fn start_push_server(
     .await?;
 
     Ok(())
+}
+
+/// Handle batched webhook (X-Batch: 1): parse {"body":..., "entries":[...]}
+/// and fan-out to each recipient's gateway with per-recipient headers.
+async fn handle_batch_webhook(
+    State(state): State<PushState>,
+    body: Bytes,
+) -> axum::http::Response<axum::body::Body> {
+    let batch: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("Invalid batch JSON: {}", e)).into_response();
+        }
+    };
+
+    let shared_body = match batch.get("body") {
+        Some(b) => b.clone(),
+        None => return (StatusCode::BAD_REQUEST, "Missing 'body' in batch").into_response(),
+    };
+
+    let entries = match batch.get("entries").and_then(|e| e.as_array()) {
+        Some(arr) => arr,
+        None => return (StatusCode::BAD_REQUEST, "Missing 'entries' array in batch").into_response(),
+    };
+
+    let total = entries.len();
+    let mut delivered = 0usize;
+
+    for entry in entries {
+        let email = match entry["email"].as_str() {
+            Some(e) => e,
+            None => continue,
+        };
+
+        let route = match state.router.lookup(email) {
+            Some(r) => r,
+            None => {
+                tracing::warn!(email = %email, "Batch entry has no route");
+                continue;
+            }
+        };
+
+        let target = route.target_url();
+        let sig = entry["signature"].as_str().unwrap_or("");
+        let ts = entry["timestamp"].as_str().unwrap_or("");
+
+        match state.http_client
+            .post(&target)
+            .header("x-amail-email", email)
+            .header("x-webhook-signature", sig)
+            .header("x-mailrelay-timestamp", ts)
+            .header("content-type", "application/json")
+            .json(&shared_body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(email = %email, "Batch entry forwarded");
+                delivered += 1;
+            }
+            Ok(resp) => {
+                tracing::warn!(email = %email, status = %resp.status(), "Batch entry non-2xx");
+            }
+            Err(e) => {
+                tracing::error!(email = %email, error = %e, "Batch entry forward failed");
+            }
+        }
+    }
+
+    if delivered == total {
+        (StatusCode::OK, format!("Batch: {}/{} delivered", delivered, total)).into_response()
+    } else {
+        (StatusCode::MULTI_STATUS, format!("Batch: {}/{} delivered", delivered, total)).into_response()
+    }
 }
 
 #[cfg(feature = "tls")]

@@ -57,14 +57,14 @@ pub async fn start_pull_loop(
         seen.retain(|_, t| t.elapsed() < seen_ttl);
 
         let sleep_secs = match fetch_pending(&state).await {
-            Ok(deliveries) => {
+            Ok(batches) => {
                 consecutive_failures = 0;
-                if !deliveries.is_empty() {
-                    tracing::info!(count = deliveries.len(), "Fetched pending deliveries");
+                if !batches.is_empty() {
+                    tracing::info!(batch_count = batches.len(), "Fetched pending deliveries");
                 }
-                // ... process deliveries (same as before, just no backoff_secs assignment)
                 let mut ack_ids: Vec<i64> = Vec::new();
-                for d in &deliveries {
+                for batch in &batches {
+                    for d in &batch.deliveries {
                     // Dedup: skip already-forwarded deliveries
                     if let Some(t) = seen.get(&d.id) {
                         if t.elapsed() < seen_ttl {
@@ -88,7 +88,7 @@ pub async fn start_pull_loop(
                     let target = route.target_url();
 
                     // Parse headers from relay payload
-                    let headers: HashMap<String, String> = match serde_json::from_str(&d.headers) {
+                    let headers: HashMap<String, String> = match serde_json::from_value(d.headers.clone()) {
                         Ok(h) => h,
                         Err(e) => {
                             tracing::warn!(id = d.id, error = %e, "Invalid headers JSON");
@@ -97,21 +97,12 @@ pub async fn start_pull_loop(
                         }
                     };
 
-                    let payload: serde_json::Value = match serde_json::from_str(&d.payload) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!(id = d.id, error = %e, "Invalid payload JSON");
-                            ack_ids.push(d.id);
-                            continue;
-                        }
-                    };
-
-                    // Forward to gateway
+                    // Forward to gateway (shared body from batch)
                     let mut req_builder = state.http_client.post(&target);
                     for (k, v) in &headers {
                         req_builder = req_builder.header(k.as_str(), v.as_str());
                     }
-                    req_builder = req_builder.json(&payload);
+                    req_builder = req_builder.json(&batch.body);
 
                     match req_builder.send().await {
                         Ok(resp) if resp.status().is_success() => {
@@ -131,7 +122,8 @@ pub async fn start_pull_loop(
                             tracing::error!(id = d.id, email = %d.email, error = %e, "Forward failed");
                         }
                     }
-                }
+                    } // end deliveries loop
+                } // end batches loop
 
                 // ACK the forwarded deliveries
                 if !ack_ids.is_empty() {
@@ -165,17 +157,22 @@ pub async fn start_pull_loop(
     }
 }
 
-/// Pending delivery from relay.
+/// Pending delivery from relay (batched format).
 #[derive(Debug, serde::Deserialize)]
-struct PendingDelivery {
-    id: i64,
-    email: String,
-    headers: String, // JSON object string
-    payload: String, // JSON object string
+struct PendingBatch {
+    body: serde_json::Value,
+    deliveries: Vec<BatchDelivery>,
 }
 
-/// Fetch pending deliveries from relay.  Returns empty vec if no known emails.
-async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dyn std::error::Error>> {
+#[derive(Debug, serde::Deserialize)]
+struct BatchDelivery {
+    id: i64,
+    email: String,
+    headers: serde_json::Value,
+}
+
+/// Fetch pending deliveries from relay (batched response).  Returns empty vec if no known emails.
+async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn std::error::Error>> {
     let emails: Vec<String> = state.router.list_emails();
     if emails.is_empty() {
         return Ok(Vec::new());
@@ -199,10 +196,10 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingDelivery>, Box<dy
         .error_for_status()?;
 
     let body: serde_json::Value = resp.json().await?;
-    let deliveries: Vec<PendingDelivery> = serde_json::from_value(body["deliveries"].clone())
+    let batches: Vec<PendingBatch> = serde_json::from_value(body["batches"].clone())
         .unwrap_or_default();
 
-    Ok(deliveries)
+    Ok(batches)
 }
 
 /// ACK deliveries back to relay.
