@@ -28,15 +28,16 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::BridgeConfig;
 
+/// CLI args parsed before daemonize (no async / tokio dependency).
 #[derive(Default)]
-struct CliArgs {
-    daemon: bool,
-    pid_file: Option<PathBuf>,
-    log_file: Option<PathBuf>,
-    config_path: Option<PathBuf>,
+pub struct CliArgs {
+    pub daemon: bool,
+    pub pid_file: Option<PathBuf>,
+    pub log_file: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
 }
 
-fn parse_args() -> CliArgs {
+pub fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut cli = CliArgs::default();
     let mut i = 1;
@@ -68,8 +69,8 @@ fn parse_args() -> CliArgs {
 }
 
 /// Double-fork daemonize: detach from terminal, redirect stdio.
-/// Returns the PID file if written.
-fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
+/// MUST be called BEFORE any tokio runtime is created.
+pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
     // Ensure log directory exists
     if let Some(parent) = log_file.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -120,22 +121,43 @@ fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+// ── entry point ────────────────────────────────────────────────────────
+// Daemonize BEFORE tokio runtime creation to avoid forking a live runtime.
+
+pub fn main() {
     let cli = parse_args();
 
-    // Resolve default paths
+    // Resolve default paths (no tokio needed)
     let hermes_home = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".hermes");
-    let pid_file = cli.pid_file.unwrap_or_else(|| hermes_home.join("amail-bridge.pid"));
-    let log_file = cli.log_file.unwrap_or_else(|| hermes_home.join("amail-bridge.log"));
+    let pid_file = cli.pid_file.clone().unwrap_or_else(|| hermes_home.join("amail-bridge.pid"));
+    let log_file = cli.log_file.clone().unwrap_or_else(|| hermes_home.join("amail-bridge.log"));
 
-    // Daemonize before anything else
+    // Daemonize before any tokio runtime exists
     if cli.daemon {
         daemonize(&pid_file, &log_file);
     }
 
+    // Now it's safe to create the tokio runtime
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime");
+
+    rt.block_on(async {
+        if let Err(e) = async_main(cli, pid_file, log_file).await {
+            tracing::error!(error = %e, "Fatal error");
+            std::process::exit(1);
+        }
+    });
+}
+
+async fn async_main(
+    cli: CliArgs,
+    pid_file: PathBuf,
+    log_file: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Init tracing — log to file if daemonized, stderr otherwise
     if cli.daemon {
         let log_writer = std::fs::OpenOptions::new()
@@ -171,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown_clone = shutdown.clone();
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
-        tracing::info!("SIGTERM received, initiating graceful shutdown...");
+        tracing::info!("SIGINT received, initiating graceful shutdown...");
         shutdown_clone.store(true, Ordering::SeqCst);
     });
 
