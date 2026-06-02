@@ -256,6 +256,8 @@ pub async fn start_push_server(
     #[cfg(feature = "tls")]
     if config.push.tls {
         // Determine TLS cert source: static files > ACME > HTTP fallback
+        let mut acme_stop: Option<Arc<AtomicBool>> = None;
+
         let (cert_path, key_path) = if config.push.tls_cert.is_some() && config.push.tls_key.is_some() {
             (config.push.tls_cert.clone().unwrap(), config.push.tls_key.clone().unwrap())
         } else if !config.push.public_url.is_empty() {
@@ -264,9 +266,10 @@ pub async fn start_push_server(
                     let cache = config.push.acme_cache.clone()
                         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
                     tracing::info!(%domain, cache = %cache.display(), "Attempting ACME certificate...");
-                    match crate::acme::acquire_cert(&domain, &cache, None) {
-                        Ok(paths) => {
+                    match crate::acme::get_or_acquire_cert(&domain, &cache, None) {
+                        Ok((paths, stop)) => {
                             tracing::info!("ACME succeeded — using auto-cert");
+                            acme_stop = Some(stop);
                             (paths.cert, paths.key)
                         }
                         Err(e) => {
@@ -305,6 +308,15 @@ pub async fn start_push_server(
             .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
+
+        // Signal ACME renew thread to stop
+        if let Some(stop) = acme_stop {
+            stop.store(true, Ordering::SeqCst);
+            // Thread polls every 10s — give it a moment to notice
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            tracing::info!("ACME renew thread signalled to stop");
+        }
+
         return Ok(());
     }
 
