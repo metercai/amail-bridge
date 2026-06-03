@@ -10,40 +10,26 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: amail-bridge-linux-amd64
+            native: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: amail-bridge-linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: amail-bridge-darwin-amd64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: amail-bridge-darwin-arm64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact: amail-bridge-windows-amd64.exe
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            artifact: amail-bridge-windows-arm64.exe
+            native: false
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps (linux)
-        if: runner.os == 'Linux'
+      - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
-      - name: Install system deps (macos)
-        if: runner.os == 'macOS'
-        run: brew install openssl
-
       - name: Install aarch64 cross-compiler
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: matrix.native == false
         run: |
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
@@ -59,13 +45,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        shell: bash
-        run: |
-          SRC="target/${{ matrix.target }}/release/amail-bridge"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            SRC="${SRC}.exe"
-          fi
-          cp "$SRC" "${{ matrix.artifact }}"
+        run: cp target/${{ matrix.target }}/release/amail-bridge ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
