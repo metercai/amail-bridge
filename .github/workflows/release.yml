@@ -11,30 +11,65 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
             artifact: amail-bridge-linux-amd64
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: amail-bridge-linux-arm64
+            cross: true
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install deps
+        if: matrix.cross == false
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Rust
+        if: matrix.cross == false
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build
-        run: cargo build --release
+      - name: Install cross
+        if: matrix.cross == true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
-      - name: Verify binary
-        run: file target/release/amail-bridge && ls -lh target/release/amail-bridge
+      - name: Build (native)
+        if: matrix.cross == false
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross == true
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/amail-bridge ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: target/release/amail-bridge
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Flatten
+        run: for d in amail-bridge-*/; do cp "$d"* .; done
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: amail-bridge-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
