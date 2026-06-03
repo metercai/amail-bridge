@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            artifact: amail-bridge-linux-amd64
+            artifact: amail-bridge-linux-amd64-${{ github.ref_name }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +48,6 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: amail-bridge-linux-amd64/amail-bridge-linux-amd64
+          files: amail-bridge-linux-amd64-${{ github.ref_name }}/amail-bridge-linux-amd64-${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
