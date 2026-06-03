@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,43 +17,24 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             artifact: amail-bridge-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            artifact: amail-bridge-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system deps
+      - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
-      - name: Install cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cross build --release --target ${{ matrix.target }}
+        run: cargo build --release
 
-      - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/amail-bridge ${{ matrix.artifact }}
+      - name: Verify binary
+        run: file target/release/amail-bridge && ls -lh target/release/amail-bridge
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - uses: actions/download-artifact@v4
-      - name: Flatten
-        run: for d in amail-bridge-*/; do cp "$d"* .; done
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: amail-bridge-*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: target/release/amail-bridge
