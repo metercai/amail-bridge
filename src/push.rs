@@ -157,7 +157,7 @@ pub fn build_push_router(state: PushState) -> Router {
     let mut router = Router::new()
         .route("/webhooks/{*name}", post(handle_webhook))
         .route("/health", get(health))
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
+        .layer(DefaultBodyLimit::max((state.config.push.body_limit_mb as usize) * 1024 * 1024)) // 10 MB
         .with_state(state.clone());
 
     // IP blacklist (checked first, before allowlist)

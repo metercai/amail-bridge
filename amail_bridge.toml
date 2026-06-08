@@ -23,6 +23,7 @@ tls = false
 # blacklist_ips = ["1.2.3.4", "10.0.0.0/8"]  # permanently blocked IPs/CIDRs
 # allowed_ips = ["10.0.0.0/8", "192.168.1.1"]  # IP allowlist (empty = allow all)
 # rate_limit = 30                               # req/sec per source IP (0 = disabled)
+# body_limit_mb = 20                            # max request body size in MB
 
 # ── Virtual host sites (optional, push mode only) ─────────────────
 # Each site maps a domain to static files, a reverse proxy, or a redirect.

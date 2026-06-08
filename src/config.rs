@@ -88,12 +88,17 @@ pub struct PushConfig {
     #[serde(default = "default_rate_limit")]
     pub rate_limit: u32,
 
+    /// Max request body size in MB. Default 20.
+    #[serde(default = "default_body_limit")]
+    pub body_limit_mb: u32,
+
     /// Virtual host sites (optional).
     #[serde(default)]
     pub sites: Vec<VhostSiteConfig>,
 }
 
 fn default_rate_limit() -> u32 { 30 }
+fn default_body_limit() -> u32 { 20 }
 
 /// TOML-deserialized virtual host site configuration.
 #[derive(Debug, Clone, Deserialize)]
