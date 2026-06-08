@@ -117,6 +117,7 @@ impl IpRateLimiter {
     }
 
     /// Returns true if the request is allowed (under limit).
+    /// Also cleans up stale entries older than 2 seconds.
     pub fn check(&self, ip: IpAddr) -> bool {
         if self.max_per_sec == 0 { return true; }
         let now = std::time::SystemTime::now()
@@ -124,6 +125,8 @@ impl IpRateLimiter {
             .unwrap_or_default()
             .as_secs();
         let mut w = self.window.lock().unwrap();
+        // Cleanup stale entries (older than 2 seconds)
+        w.retain(|_, (ts, _)| now - *ts <= 2);
         let entry = w.entry(ip).or_insert((now, 0));
         if entry.0 != now {
             entry.0 = now;
