@@ -228,3 +228,51 @@ impl BridgeConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_defaults() {
+        let cfg: BridgeConfig = toml::from_str("mode = \"pull\"\n[pull]\n").unwrap();
+        assert_eq!(cfg.mode, "pull");
+        assert_eq!(cfg.push.bind_port, 38080);
+        assert_eq!(cfg.push.body_limit_mb, 20);
+        assert_eq!(cfg.push.rate_limit, 30);
+        assert!(cfg.push.blacklist_ips.is_empty());
+    }
+
+    #[test]
+    fn test_push_config_with_limits() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+blacklist_ips = ["1.2.3.4"]
+allowed_ips = ["10.0.0.0/8"]
+rate_limit = 100
+body_limit_mb = 50
+"#).unwrap();
+        assert_eq!(cfg.push.rate_limit, 100);
+        assert_eq!(cfg.push.body_limit_mb, 50);
+        assert_eq!(cfg.push.blacklist_ips, vec!["1.2.3.4"]);
+    }
+
+    #[test]
+    fn test_vhost_sites_parse() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+[[push.sites]]
+domain = "www.example.com"
+root = "/var/www"
+[[push.sites]]
+domain = "old.example.com"
+redirect = "https://www.example.com"
+"#).unwrap();
+        assert_eq!(cfg.push.sites.len(), 2);
+        assert_eq!(cfg.push.sites[0].domain, "www.example.com");
+        assert_eq!(cfg.push.sites[0].root.as_deref(), Some("/var/www"));
+        assert_eq!(cfg.push.sites[1].redirect.as_deref(), Some("https://www.example.com"));
+    }
+}
+

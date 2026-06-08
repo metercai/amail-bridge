@@ -573,3 +573,72 @@ fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path
         std::sync::Arc::new(config),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn test_parse_cidr_single_ip() {
+        assert_eq!(parse_cidr("192.168.1.1"), Some(("192.168.1.1".parse().unwrap(), 32)));
+    }
+
+    #[test]
+    fn test_parse_cidr_network() {
+        assert_eq!(parse_cidr("10.0.0.0/8"), Some(("10.0.0.0".parse().unwrap(), 8)));
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid() {
+        assert_eq!(parse_cidr("not-an-ip"), None);
+        assert_eq!(parse_cidr("10.0.0.0/33"), None);
+    }
+
+    #[test]
+    fn test_ip_matches() {
+        let ip: IpAddr = "192.168.1.50".parse().unwrap();
+        let net: IpAddr = "192.168.1.0".parse().unwrap();
+        assert!(ip_matches(ip, net, 24));
+        assert!(!ip_matches(ip, net, 32));
+    }
+
+    #[test]
+    fn test_allowlist_allows() {
+        let allowlist = IpAllowlist::from_config(&["10.0.0.0/8".into()]);
+        assert!(allowlist.allows("10.1.2.3".parse().unwrap()));
+        assert!(!allowlist.allows("192.168.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_allowlist_empty_allows_all() {
+        let allowlist = IpAllowlist::from_config(&[]);
+        assert!(allowlist.allows("1.2.3.4".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_blacklist_blocks() {
+        let blacklist = IpBlacklist::from_config(&["10.0.0.0/8".into()]);
+        assert!(blacklist.blocks("10.1.2.3".parse().unwrap()));
+        assert!(!blacklist.blocks("192.168.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_rate_limiter_allows_under_limit() {
+        let limiter = IpRateLimiter::new(5);
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        for _ in 0..5 {
+            assert!(limiter.check(ip));
+        }
+        assert!(!limiter.check(ip)); // 6th should be blocked
+    }
+
+    #[test]
+    fn test_rate_limiter_disabled() {
+        let limiter = IpRateLimiter::new(0);
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        for _ in 0..100 {
+            assert!(limiter.check(ip));
+        }
+    }
+}

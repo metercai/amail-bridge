@@ -34,3 +34,6 @@ acme-micro = "0.14"
 [features]
 default = ["tls"]
 tls = ["axum-server/tls-rustls", "rustls", "rustls-pemfile"]
+
+[dev-dependencies]
+tempfile = "3"

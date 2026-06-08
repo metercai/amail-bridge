@@ -270,3 +270,51 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_profile(dir: &std::path::Path, email: &str, port: u16) {
+        std::fs::create_dir_all(dir).unwrap();
+        let amail = serde_json::json!({"email": email});
+        std::fs::write(dir.join("amail.json"), amail.to_string()).unwrap();
+        let config = format!("platforms:\n  webhook:\n    extra:\n      port: {port}\n");
+        std::fs::write(dir.join("config.yaml"), config).unwrap();
+    }
+
+    #[test]
+    fn test_load_route_valid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let prof = tmp.path().join("profiles").join("test-agent");
+        make_profile(&prof, "alice@x.com", 8645);
+        let router = ProfileRouter::new(tmp.path(), vec![]);
+        let route = router.load_route(&prof).unwrap();
+        assert_eq!(route.email, "alice@x.com");
+        assert_eq!(route.host, "127.0.0.1");
+        assert_eq!(route.port, 8645);
+    }
+
+    #[test]
+    fn test_host_override() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let prof = tmp.path().join("profiles").join("r");
+        make_profile(&prof, "bob@admin.relay", 9000);
+        let re = regex::Regex::new(".*@admin.relay").unwrap();
+        let router = ProfileRouter::new(tmp.path(), vec![(re, "10.0.0.1".into())]);
+        let route = router.load_route(&prof).unwrap();
+        assert_eq!(route.host, "10.0.0.1");
+    }
+
+    #[test]
+    fn test_full_scan_and_lookup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let prof = tmp.path().join("profiles").join("a1");
+        make_profile(&prof, "a1@t.local", 8001);
+        let router = ProfileRouter::new(tmp.path(), vec![]);
+        router.full_scan();
+        assert_eq!(router.route_count(), 1);
+        assert!(router.lookup("a1@t.local").is_some());
+        assert!(router.lookup("nobody@t.local").is_none());
+    }
+}
