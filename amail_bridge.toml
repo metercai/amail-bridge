@@ -21,6 +21,20 @@ tls = false
 # tls_cert = "/etc/ssl/bridge.crt"            # Required when tls = true
 # tls_key  = "/etc/ssl/bridge.key"
 
+# ── Virtual host sites (optional, push mode only) ─────────────────
+# Each site maps a domain to static files, a reverse proxy, or a redirect.
+# [[push.sites]]
+# domain = "www.example.com"
+# root = "/var/www/example"                  # static site
+#
+# [[push.sites]]
+# domain = "api.example.com"
+# proxy = "127.0.0.1:3000"                   # reverse proxy
+#
+# [[push.sites]]
+# domain = "old.example.com"
+# redirect = "https://www.example.com"       # 308 redirect
+
 # ── Pull mode (bridge polls relay outbound) ───────────────────────
 [pull]
 relay_url = "http://192.168.1.1:38080"

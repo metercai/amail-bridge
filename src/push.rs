@@ -105,6 +105,27 @@ pub fn build_push_router(state: PushState) -> Router {
         tracing::info!(count = state.config.push.allowed_ips.len(), "IP allowlist enabled");
     }
 
+    // Vhost routing: intercept unmatched paths via fallback
+    if !state.config.push.sites.is_empty() {
+        let vhost_routes = std::sync::Arc::new(
+            crate::vhost::build_routes(&state.config.push.sites)
+        );
+        let vr = vhost_routes.clone();
+        router = router.fallback(move |req| {
+            let vr = vr.clone();
+            async move {
+                if let Some(route) = crate::vhost::find_vhost(&req, &vr) {
+                    return crate::vhost::handle_vhost(route, req).await;
+                }
+                axum::http::Response::builder()
+                    .status(404)
+                    .body(axum::body::Body::from("not found"))
+                    .unwrap()
+            }
+        });
+        tracing::info!(count = state.config.push.sites.len(), "Vhost sites loaded");
+    }
+
     router
 }
 

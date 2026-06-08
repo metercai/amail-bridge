@@ -20,6 +20,7 @@ mod config;
 mod pull;
 mod push;
 mod router;
+mod vhost;
 
 use std::path::PathBuf;
 use std::process;

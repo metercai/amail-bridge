@@ -79,6 +79,22 @@ pub struct PushConfig {
     /// Example: `allowed_ips = ["10.0.0.0/8", "192.168.1.1"]`
     #[serde(default)]
     pub allowed_ips: Vec<String>,
+
+    /// Virtual host sites (optional).
+    #[serde(default)]
+    pub sites: Vec<VhostSiteConfig>,
+}
+
+/// TOML-deserialized virtual host site configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VhostSiteConfig {
+    pub domain: String,
+    #[serde(default)]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<String>,
+    #[serde(default)]
+    pub redirect: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
