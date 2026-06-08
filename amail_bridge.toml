@@ -20,6 +20,9 @@ tls = false
 # public_url = "https://bridge.example.com"   # Printed at startup for relay config
 # tls_cert = "/etc/ssl/bridge.crt"            # Required when tls = true
 # tls_key  = "/etc/ssl/bridge.key"
+# blacklist_ips = ["1.2.3.4", "10.0.0.0/8"]  # permanently blocked IPs/CIDRs
+# allowed_ips = ["10.0.0.0/8", "192.168.1.1"]  # IP allowlist (empty = allow all)
+# rate_limit = 30                               # req/sec per source IP (0 = disabled)
 
 # ── Virtual host sites (optional, push mode only) ─────────────────
 # Each site maps a domain to static files, a reverse proxy, or a redirect.

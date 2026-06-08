@@ -7,9 +7,10 @@
 //! Optional per-IP allowlist for DDoS protection — configure
 //! `push.allowed_ips` in amail_bridge.toml.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::{
     body::Bytes,
@@ -77,6 +78,66 @@ fn parse_cidr(s: &str) -> Option<(IpAddr, u8)> {
     Some((ip, prefix))
 }
 
+/// IP/CIDR blacklist. Empty = allow all.
+#[derive(Clone)]
+pub struct IpBlacklist {
+    entries: Vec<(IpAddr, u8)>,
+}
+
+impl IpBlacklist {
+    pub fn from_config(raw: &[String]) -> Self {
+        let entries = raw.iter().filter_map(|s| {
+            match parse_cidr(s) {
+                Some(e) => Some(e),
+                None => {
+                    tracing::warn!(entry = %s, "Invalid IP/CIDR in blacklist_ips — skipping");
+                    None
+                }
+            }
+        }).collect();
+        Self { entries }
+    }
+
+    pub fn blocks(&self, ip: IpAddr) -> bool {
+        if self.entries.is_empty() { return false; }
+        self.entries.iter().any(|&(network, prefix)| ip_matches(ip, network, prefix))
+    }
+}
+
+/// Simple per-IP rate limiter using a sliding window.
+#[derive(Clone)]
+pub struct IpRateLimiter {
+    window: Arc<Mutex<HashMap<IpAddr, (u64, u32)>>>, // ip → (window_start_secs, count)
+    max_per_sec: u32,
+}
+
+impl IpRateLimiter {
+    pub fn new(max_per_sec: u32) -> Self {
+        Self { window: Arc::new(Mutex::new(HashMap::new())), max_per_sec }
+    }
+
+    /// Returns true if the request is allowed (under limit).
+    pub fn check(&self, ip: IpAddr) -> bool {
+        if self.max_per_sec == 0 { return true; }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut w = self.window.lock().unwrap();
+        let entry = w.entry(ip).or_insert((now, 0));
+        if entry.0 != now {
+            entry.0 = now;
+            entry.1 = 1;
+            return true;
+        }
+        if entry.1 >= self.max_per_sec {
+            return false;
+        }
+        entry.1 += 1;
+        true
+    }
+}
+
 fn ip_matches(ip: IpAddr, network: IpAddr, prefix: u8) -> bool {
     match (ip, network) {
         (IpAddr::V4(ip), IpAddr::V4(net)) => {
@@ -99,10 +160,24 @@ pub fn build_push_router(state: PushState) -> Router {
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10 MB
         .with_state(state.clone());
 
+    // IP blacklist (checked first, before allowlist)
+    if !state.config.push.blacklist_ips.is_empty() {
+        let blacklist = IpBlacklist::from_config(&state.config.push.blacklist_ips);
+        router = router.layer(middleware::from_fn_with_state(blacklist, check_blacklist));
+        tracing::info!(count = state.config.push.blacklist_ips.len(), "IP blacklist enabled");
+    }
+
     if !state.config.push.allowed_ips.is_empty() {
         let allowlist = IpAllowlist::from_config(&state.config.push.allowed_ips);
         router = router.layer(middleware::from_fn_with_state(allowlist, check_ip));
         tracing::info!(count = state.config.push.allowed_ips.len(), "IP allowlist enabled");
+    }
+
+    // Rate limiting (per source IP)
+    if state.config.push.rate_limit > 0 {
+        let limiter = IpRateLimiter::new(state.config.push.rate_limit);
+        router = router.layer(middleware::from_fn_with_state(limiter, check_rate_limit));
+        tracing::info!(rps = state.config.push.rate_limit, "Rate limiting enabled");
     }
 
     // Vhost routing: intercept unmatched paths via fallback
@@ -146,6 +221,34 @@ async fn check_ip(
 }
 
 /// Health check — also prints route count.
+/// Middleware: reject blacklisted IPs (403).
+async fn check_blacklist(
+    State(blacklist): State<IpBlacklist>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::http::Response<axum::body::Body>, StatusCode> {
+    if blacklist.blocks(addr.ip()) {
+        tracing::warn!(ip = %addr.ip(), "Blocked by IP blacklist");
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
+}
+
+/// Middleware: rate-limit per source IP (429 Too Many Requests).
+async fn check_rate_limit(
+    State(limiter): State<IpRateLimiter>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::http::Response<axum::body::Body>, StatusCode> {
+    if !limiter.check(addr.ip()) {
+        tracing::warn!(ip = %addr.ip(), "Rate limited");
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    Ok(next.run(request).await)
+}
+
 async fn health(State(state): State<PushState>) -> String {
     format!(
         "amail-bridge push mode OK\nroutes: {}\nbinding: {}:{}\n",

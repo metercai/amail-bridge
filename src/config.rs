@@ -80,10 +80,20 @@ pub struct PushConfig {
     #[serde(default)]
     pub allowed_ips: Vec<String>,
 
+    /// IP/CIDR blacklist. Blocked before allowlist check. Empty = none.
+    #[serde(default)]
+    pub blacklist_ips: Vec<String>,
+
+    /// Rate limit (requests/sec per source IP). 0 = disabled. Default 30.
+    #[serde(default = "default_rate_limit")]
+    pub rate_limit: u32,
+
     /// Virtual host sites (optional).
     #[serde(default)]
     pub sites: Vec<VhostSiteConfig>,
 }
+
+fn default_rate_limit() -> u32 { 30 }
 
 /// TOML-deserialized virtual host site configuration.
 #[derive(Debug, Clone, Deserialize)]
@@ -212,3 +222,4 @@ impl BridgeConfig {
         }).collect()
     }
 }
+
