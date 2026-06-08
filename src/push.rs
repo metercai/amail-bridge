@@ -272,12 +272,14 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── Batch mode (X-Batch header) ─────────────────────────────
-    if headers.get("x-batch").and_then(|v| v.to_str().ok()) == Some("1") {
-        return handle_batch_webhook(axum::extract::State(state), body).await;
+    // ── Multi-recipient: signatures array in payload, no x-batch header ──
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+            return handle_batch_webhook(axum::extract::State(state), body).await;
+        }
     }
 
-    // ── Single mode ─────────────────────────────────────────────
+    // ── Single mode (X-Amail-Email header) ───────────────────────
     // Resolve target from X-Amail-Email header
     let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
