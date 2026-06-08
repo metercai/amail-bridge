@@ -126,6 +126,7 @@ pub fn build_push_router(state: PushState) -> Router {
         tracing::info!(count = state.config.push.sites.len(), "Vhost sites loaded");
     }
 
+    router = crate::security::apply_security_headers(router);
     router
 }
 

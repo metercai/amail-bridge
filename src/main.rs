@@ -21,6 +21,7 @@ mod pull;
 mod push;
 mod router;
 mod vhost;
+mod security;
 
 use std::path::PathBuf;
 use std::process;
