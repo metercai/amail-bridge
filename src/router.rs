@@ -233,9 +233,15 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
         tracing::warn!(dir = %watch_dir.display(), "Profiles directory not found — routes will be empty");
     }
 
-    // Watch parent (~/.hermes/) for default profile changes
+    // Watch default profile files specifically (not entire parent dir
+    // which contains frequently-updated files like models_dev_cache.json)
     if let Some(parent) = watch_dir.parent() {
-        let _ = watcher.watch(parent, RecursiveMode::NonRecursive);
+        for f in &["amail.json", "config.yaml"] {
+            let p = parent.join(f);
+            if p.exists() {
+                let _ = watcher.watch(&p, RecursiveMode::NonRecursive);
+            }
+        }
     }
 
     // Initial full scan
@@ -246,7 +252,13 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
         let _watcher = watcher; // keep alive for the lifetime of this task
         while let Ok(event) = rx.recv() {
             let should_rescan = match event.kind {
-                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => true,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {
+                    // Only rescan on relevant files: profile dirs, amail.json, config.yaml
+                    event.paths.iter().any(|p| {
+                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        p.is_dir() || name == "amail.json" || name == "config.yaml"
+                    })
+                }
                 _ => false,
             };
             if should_rescan {
