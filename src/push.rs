@@ -272,12 +272,15 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── Batch mode (X-Batch header) ─────────────────────────────
-    if headers.get("x-batch").and_then(|v| v.to_str().ok()) == Some("1") {
-        return handle_batch_webhook(axum::extract::State(state), body).await;
+    // ── Multi-recipient (signatures array in payload) ──────────
+    // Try parse as JSON to check for "signatures" array
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+            return handle_batch_webhook(axum::extract::State(state), body).await;
+        }
     }
 
-    // ── Single mode (legacy) ────────────────────────────────────
+    // ── Single mode ─────────────────────────────────────────────
     // Resolve target from X-Amail-Email header
     let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
@@ -472,8 +475,9 @@ async fn start_push_http(
     Ok(())
 }
 
-/// Handle batched webhook (X-Batch: 1): parse {"body":..., "entries":[...]}
-/// and fan-out to each recipient's gateway with per-recipient headers.
+/// Handle multi-recipient webhook: payload has "signatures" array,
+/// payload itself IS the body (no "body" wrapper).
+/// Fan-out to each recipient's gateway with per-recipient headers.
 async fn handle_batch_webhook(
     State(state): State<PushState>,
     body: Bytes,
@@ -485,20 +489,19 @@ async fn handle_batch_webhook(
         }
     };
 
-    let shared_body = match batch.get("body") {
-        Some(b) => b.clone(),
-        None => return (StatusCode::BAD_REQUEST, "Missing 'body' in batch").into_response(),
-    };
-
-    let entries = match batch.get("entries").and_then(|e| e.as_array()) {
+    let sigs = match batch.get("signatures").and_then(|e| e.as_array()) {
         Some(arr) => arr,
-        None => return (StatusCode::BAD_REQUEST, "Missing 'entries' array in batch").into_response(),
+        None => return (StatusCode::BAD_REQUEST, "Missing 'signatures' array").into_response(),
     };
 
-    let total = entries.len();
+    // Shared body = payload minus the signatures array
+    let mut shared_body = batch.clone();
+    let _ = shared_body.as_object_mut().map(|o| o.remove("signatures"));
+
+    let total = sigs.len();
     let mut delivered = 0usize;
 
-    for entry in entries {
+    for entry in sigs {
         let email = match entry["email"].as_str() {
             Some(e) => e,
             None => continue,
@@ -540,9 +543,9 @@ async fn handle_batch_webhook(
     }
 
     if delivered == total {
-        (StatusCode::OK, format!("Batch: {}/{} delivered", delivered, total)).into_response()
+        (StatusCode::OK, format!("{}/{} delivered", delivered, total)).into_response()
     } else {
-        (StatusCode::MULTI_STATUS, format!("Batch: {}/{} delivered", delivered, total)).into_response()
+        (StatusCode::MULTI_STATUS, format!("{}/{} delivered", delivered, total)).into_response()
     }
 }
 
