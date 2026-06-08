@@ -197,7 +197,10 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
 
     let body: serde_json::Value = resp.json().await?;
     let batches: Vec<PendingBatch> = serde_json::from_value(body["batches"].clone())
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to parse pending batches from relay response");
+            Vec::new()
+        });
 
     Ok(batches)
 }
@@ -219,5 +222,9 @@ async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn
         .error_for_status()?;
 
     let body: serde_json::Value = resp.json().await?;
-    Ok(body["acked"].as_u64().unwrap_or(0) as usize)
+    let acked = body["acked"].as_u64();
+    if acked.is_none() {
+        tracing::warn!(?body, "ACK response missing 'acked' field");
+    }
+    Ok(acked.unwrap_or(0) as usize)
 }

@@ -155,7 +155,12 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
                     // Copy safe headers (skip hop-by-hop headers only)
                     for (k, v) in resp.headers().iter() {
                         let key = k.as_str().to_lowercase();
-                        if key != "transfer-encoding" && key != "connection" {
+                        // Skip hop-by-hop headers (RFC 2616 §13.5.1)
+                        if key != "transfer-encoding" && key != "connection"
+                            && key != "keep-alive" && key != "proxy-authenticate"
+                            && key != "proxy-authorization" && key != "te"
+                            && key != "trailer" && key != "upgrade"
+                        {
                             builder = builder.header(k.clone(), v.clone());
                         }
                     }

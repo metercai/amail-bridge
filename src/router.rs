@@ -229,6 +229,8 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
     let watch_dir = router.profiles_dir.clone();
     if watch_dir.exists() {
         watcher.watch(&watch_dir, RecursiveMode::NonRecursive)?;
+    } else {
+        tracing::warn!(dir = %watch_dir.display(), "Profiles directory not found — routes will be empty");
     }
 
     // Watch parent (~/.hermes/) for default profile changes
