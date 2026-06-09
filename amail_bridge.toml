@@ -1,50 +1,44 @@
-# ── amail-bridge configuration ─────────────────────────────────────
-# Config format aligned with amail-gateway (host:port, hostname→TLS).
+# amail-bridge configuration
 
-mode = "pull"  # "push" or "pull"
+mode = "pull"  # "push" or "pull" (default: "pull")
 
-# ── Per-agent host overrides (multi-machine LAN deployments) ──────
-# Regex pattern → IP or hostname. First match wins.
-# Agents not matching any pattern default to 127.0.0.1 (same-machine).
-#
+# Per-agent host overrides for multi-machine deployments.
+# Regex → IP/hostname. First match wins. Unmatched agents default to 127.0.0.1.
 [hosts]
-
-".*@admin.relay"    = "192.168.1.2"    # all agents on this domain → this host
-"bob@.*"            = "192.168.1.11"   # bob on any domain → this host
-"alice@admin.relay" = "192.168.1.10"   # exact match (precise overrides first)
+".*@admin.relay"    = "192.168.1.2"
+"bob@.*"            = "192.168.1.11"
+"alice@admin.relay" = "192.168.1.10"
 
 # ── Pull mode (bridge polls relay outbound) ───────────────────────
 [pull]
-relay_url = "http://192.168.1.1:38080"
-admin_key = "sk-..."   # system_admin API key from relay
-system_id = "admin"
-poll_interval_sec = 10
+relay_url = "http://192.168.1.1:38080"  # Relay HTTP API URL
+admin_key = "sk-..."                    # System admin API key from relay
+system_id = "admin"                     # System ID for pending-query (default: "admin")
+poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 
 # ── Push mode (bridge receives external POSTs) ────────────────────
-# addr: listen address in "host:port" format.
-# hostname: when set → TLS enabled (static cert or ACME auto-cert).
-#   If port=80 + hostname set → dual-port mode (80→443 redirect).
+# Uncomment to enable. addr format: "host:port". hostname enables TLS.
 #
 # [push]
-# addr = "0.0.0.0:38080"
-# hostname = "bridge.example.com"      # enables TLS
-# tls_cert = "/etc/ssl/bridge.crt"     # static cert (optional, ACME fallback)
-# tls_key  = "/etc/ssl/bridge.key"
-# acme_cache = "/var/cache/acme"       # ACME cache dir (default: ~/.hermes/acme)
-# blacklist_ips = ["1.2.3.4", "10.0.0.0/8"]  # permanently blocked IPs/CIDRs
-# allowed_ips = ["10.0.0.0/8", "192.168.1.1"]  # IP allowlist (empty = allow all)
-# rate_limit = 30                               # req/sec per source IP (0 = disabled)
-# body_limit_mb = 20                            # max request body size in MB
+# addr = "0.0.0.0:38080"                    # default: "0.0.0.0:38080"
+# hostname = "bridge.example.com"           # enables TLS (ACME auto-cert if no tls_cert/tls_key)
+# tls_cert = "/etc/ssl/bridge.crt"          # static TLS cert path
+# tls_key  = "/etc/ssl/bridge.key"          # static TLS key path
+# acme_cache = "/var/cache/acme"            # ACME cache dir (default: ~/.hermes/acme)
+# blacklist_ips = ["1.2.3.4", "10.0.0.0/8"] # permanently blocked IPs/CIDRs (default: [])
+# allowed_ips = ["10.0.0.0/8", "192.168.1.1"] # IP allowlist, empty = allow all (default: [])
+# rate_limit = 30                            # req/sec per source IP, 0 = disabled (default: 30)
+# body_limit_mb = 20                         # max request body size in MB (default: 20)
 
-# ── Virtual host sites (optional, push mode only) ─────────────────
+# Virtual host sites (optional, push mode only)
 # [[push.sites]]
 # domain = "www.example.com"
-# root = "/var/www/example"                  # static site
+# root = "/var/www/example"                  # static site directory
 #
 # [[push.sites]]
 # domain = "api.example.com"
-# proxy = "127.0.0.1:3000"                   # reverse proxy
+# proxy = "127.0.0.1:3000"                   # reverse proxy target
 #
 # [[push.sites]]
 # domain = "old.example.com"
-# redirect = "https://www.example.com"       # 308 redirect
+# redirect = "https://www.example.com"       # 308 redirect URL
