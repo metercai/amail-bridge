@@ -70,6 +70,7 @@ pub async fn start_pull_loop(
                     if let Some(t) = seen.get(&d.id) {
                         if t.elapsed() < seen_ttl {
                             tracing::debug!(id = d.id, "Already forwarded — ACKing without re-forward");
+                            forwarded_emails.push(d.email.clone());
                             ack_ids.push(d.id);
                             continue;
                         }

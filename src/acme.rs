@@ -169,8 +169,14 @@ async fn acquire_cert_inner(
         let token = challenge.token.clone();
         let proof = key_auth.as_str().to_string();
 
-        // Serve the challenge on port 80 (synchronous TCP, brief)
-        serve_challenge(&token, &proof)?;
+        // Serve the challenge on port 80 via blocking thread pool
+        // (synchronous TCP, brief — avoids blocking an async worker)
+        let token_clone = token.clone();
+        let proof_clone = proof.to_string();
+        tokio::task::spawn_blocking(move || {
+            serve_challenge(&token_clone, &proof_clone)
+        })
+        .await??;
 
         challenge.set_ready().await?;
     }

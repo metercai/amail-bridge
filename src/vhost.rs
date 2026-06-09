@@ -154,7 +154,7 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Opt
                 axum::http::HeaderValue::from_str(&client_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "unknown".into()))
                     .unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")));
 
-            // Convert axum Body to bytes for reqwest (10MB limit for proxy req bodies)
+            // Convert axum Body to bytes for reqwest (matches push body_limit_mb default)
             let axum_body = req.into_body();
             let body_bytes = axum::body::to_bytes(axum_body, 20 * 1024 * 1024)
                 .await

@@ -204,7 +204,14 @@ pub fn main() {
         .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
-        if let Err(e) = async_main(cli, pid_file, log_file).await {
+        let daemon = cli.daemon;
+        let pid_file_display = pid_file.clone();
+        let result = async_main(cli, pid_file, log_file).await;
+        // Always clean up PID file, even on error
+        if daemon {
+            let _ = std::fs::remove_file(&pid_file_display);
+        }
+        if let Err(e) = result {
             tracing::error!(error = %e, "Fatal error");
             std::process::exit(1);
         }
@@ -213,7 +220,7 @@ pub fn main() {
 
 async fn async_main(
     cli: CliArgs,
-    pid_file: PathBuf,
+    _pid_file: PathBuf,
     log_file: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Install ring as the default rustls crypto provider (must be done once at startup)
@@ -267,13 +274,8 @@ async fn async_main(
         "pull" => pull::start_pull_loop(config, router, shutdown).await?,
         other => {
             tracing::error!(mode = %other, "Unknown mode. Use 'push' or 'pull'.");
-            process::exit(1);
+            return Err(format!("Unknown mode: {other}").into());
         }
-    }
-
-    // Clean up PID file
-    if cli.daemon {
-        let _ = std::fs::remove_file(&pid_file);
     }
 
     Ok(())

@@ -344,7 +344,13 @@ async fn handle_webhook(
     {
         Ok(resp) => {
             let status = resp.status();
-            let body_bytes = resp.bytes().await.unwrap_or_default();
+            let body_bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(email = %email, error = %e, "Failed to read response body from gateway");
+                    Bytes::new()
+                }
+            };
             tracing::info!(
                 email = %email,
                 status = %status,
@@ -448,8 +454,8 @@ pub async fn start_push_server(
         // Signal ACME renew thread to stop
         if let Some(stop) = acme_stop {
             stop.store(true, Ordering::SeqCst);
-            // Thread polls every 10s — give it a moment to notice
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            // Give the ACME renew thread a moment to notice the stop flag
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             tracing::info!("ACME renew thread signalled to stop");
         }
 
