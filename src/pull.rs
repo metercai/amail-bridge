@@ -106,7 +106,6 @@ pub async fn start_pull_loop(
 
                     match req_builder.send().await {
                         Ok(resp) if resp.status().is_success() => {
-                            tracing::info!(id = d.id, email = %d.email, "Delivery forwarded");
                             seen.insert(d.id, Instant::now());
                             ack_ids.push(d.id);
                         }
@@ -128,11 +127,11 @@ pub async fn start_pull_loop(
                 // ACK the forwarded deliveries
                 if !ack_ids.is_empty() {
                     match ack_deliveries(&state, &ack_ids).await {
-                        Ok(count) => {
-                            tracing::info!(acked = count, "Deliveries ACKed");
+                        Ok(_) => {
+                            tracing::info!(forwarded = ack_ids.len(), "Pull cycle complete");
                         }
                         Err(e) => {
-                            tracing::error!(error = %e, "ACK failed — will retry");
+                            tracing::error!(forwarded = ack_ids.len(), error = %e, "ACK failed — will retry");
                         }
                     }
                 }
