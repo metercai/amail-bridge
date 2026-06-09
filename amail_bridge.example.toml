@@ -1,4 +1,6 @@
 # amail-bridge configuration
+#
+# Copy this file to amail_bridge.toml and edit to match your setup.
 
 mode = "pull"  # "push" or "pull" (default: "pull")
 
@@ -6,13 +8,6 @@ mode = "pull"  # "push" or "pull" (default: "pull")
 # [logging]
 # level = "info"                    # log level (default: "info")
 # file = "/var/log/amail-bridge.log" # log file path, stdout if unset (default: none)
-
-# Per-agent host overrides for multi-machine deployments.
-# Regex → IP/hostname. First match wins. Unmatched agents default to 127.0.0.1.
-[hosts]
-".*@admin.relay"    = "192.168.1.2"
-"bob@.*"            = "192.168.1.11"
-"alice@admin.relay" = "192.168.1.10"
 
 # ── Pull mode (bridge polls relay outbound) ───────────────────────
 [pull]
@@ -47,3 +42,7 @@ poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 # [[push.sites]]
 # domain = "old.example.com"
 # redirect = "https://www.example.com"       # 308 redirect URL
+
+# ── Multi-machine routing ─────────────────────────────────────────
+# Agent routing is now configured in amail-routes.toml (next to this file).
+# See amail-routes.example.toml for the format.
