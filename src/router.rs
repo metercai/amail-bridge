@@ -381,9 +381,12 @@ pub fn start_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
             }
         }
         // Watch routes file (written by full_scan below, so exists afterwards)
-        let routes_path = parent.join("amail-routes.toml");
+        let routes_path = router.routes_file.clone();
         if routes_path.exists() {
-            let _ = watcher.watch(&routes_path, RecursiveMode::NonRecursive);
+            if let Err(e) = watcher.watch(&routes_path, RecursiveMode::NonRecursive) {
+                tracing::warn!(path = %routes_path.display(), error = %e,
+                    "Failed to watch routes file — edits won't hot-reload");
+            }
         }
     }
 
