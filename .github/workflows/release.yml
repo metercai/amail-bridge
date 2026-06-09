@@ -20,6 +20,10 @@ jobs:
             os: ubuntu-latest
             artifact: amail-bridge-linux-amd64
             ext: ""
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            artifact: amail-bridge-linux-arm64
+            ext: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: amail-bridge-macos-amd64
