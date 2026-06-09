@@ -54,7 +54,8 @@ SIGINT/SIGTERM 优雅排空。
 `[hosts]` 表以正则匹配 agent 邮箱 → 主机 IP，首匹配即胜，未匹配默认 `127.0.0.1`。
 从 Hermes profiles（`~/.hermes/profiles/*/amail.json` + `config.yaml`）自动发现，
 单个 bridge 可桥接多个机器上的 agent。
-本机 `~/.hermes/profiles/*/` 自动发现，`amail-routes.toml` 中的条目覆盖自动发现。
+本机 `~/.hermes/profiles/*/` 自动发现，
+`amail-routes.toml`（`"邮箱" = "ip:端口"`）人工干预为准。
 inotify 热更新，修改即时生效。
 
 ```toml

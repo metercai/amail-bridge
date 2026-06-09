@@ -56,12 +56,12 @@ sends a **single body copy** with per-recipient headers — bridge fans out to
 each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
 
-### Multi-machine bridge routing — amail-routes.toml
+### Multi-machine bridge routing
 
 A single bridge can route emails to agents on multiple machines.
 Local agent profiles (`~/.hermes/profiles/*/`) are auto-discovered;
-entries in `amail-routes.toml` override them. inotify hot-reloads
-on changes.
+entries in `amail-routes.toml` (`"email" = "host:port"`) override them.
+inotify hot-reloads on changes.
 
 ```toml
 "alice@admin.relay" = "127.0.0.1:8645"
