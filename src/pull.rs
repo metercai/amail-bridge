@@ -65,6 +65,8 @@ pub async fn start_pull_loop(
                 let mut ack_ids: Vec<i64> = Vec::new();
                 let mut forwarded_emails: Vec<String> = Vec::new();
                 for batch in &batches {
+                    // Serialize shared body once per batch, not per delivery
+                    let body_bytes = axum::body::Bytes::from(serde_json::to_vec(&batch.body)?);
                     for d in &batch.deliveries {
                     // Dedup: skip already-forwarded deliveries
                     if let Some(t) = seen.get(&d.id) {
@@ -99,11 +101,13 @@ pub async fn start_pull_loop(
                     };
 
                     // Forward to gateway (shared body from batch)
-                    let mut req_builder = state.http_client.post(&target);
+                    let mut req_builder = state.http_client.post(target);
                     for (k, v) in &headers {
                         req_builder = req_builder.header(k.as_str(), v.as_str());
                     }
-                    req_builder = req_builder.json(&batch.body);
+                    req_builder = req_builder
+                        .header("content-type", "application/json")
+                        .body(body_bytes.clone());
 
                     match req_builder.send().await {
                         Ok(resp) if resp.status().is_success() => {

@@ -19,12 +19,19 @@ pub struct ProfileRoute {
     pub email: String,
     pub host: String,
     pub port: u16,
+    /// Cached target URL — computed once, reused for all lookups.
+    target_url: String,
 }
 
 impl ProfileRoute {
-    /// Build the forward target URL from this route.
-    pub fn target_url(&self) -> String {
-        format!("http://{}:{}/webhooks/amail-inbound", self.host, self.port)
+    /// Return the cached forward target URL.
+    pub fn target_url(&self) -> &str {
+        &self.target_url
+    }
+    
+    fn new(email: String, host: String, port: u16) -> Self {
+        let target_url = format!("http://{}:{}/webhooks/amail-inbound", host, port);
+        Self { email, host, port, target_url }
     }
 }
 
@@ -110,11 +117,11 @@ impl ProfileRouter {
         let mut overridden = 0usize;
         let mut added = 0usize;
         for (email, entry) in parsed {
-            let route = ProfileRoute {
-                email: email.clone(),
-                host: entry.host,
-                port: entry.port,
-            };
+            let route = ProfileRoute::new(
+                email.clone(),
+                entry.host,
+                entry.port,
+            );
             if routes.contains_key(&email) {
                 overridden += 1;
             } else {
@@ -169,7 +176,7 @@ impl ProfileRouter {
             .map(|(_, h)| h.clone())
             .unwrap_or_else(|| "127.0.0.1".to_string());
 
-        Some(ProfileRoute { email, host, port })
+        Some(ProfileRoute::new(email, host, port))
     }
 
     /// Look up the route for a given agent email address.

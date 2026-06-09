@@ -110,7 +110,7 @@ impl IpBlacklist {
 /// Simple per-IP rate limiter using a sliding window.
 #[derive(Clone)]
 pub struct IpRateLimiter {
-    window: Arc<Mutex<HashMap<IpAddr, (u64, u32)>>>, // ip → (window_start_secs, count)
+    window: Arc<Mutex<HashMap<IpAddr, (Instant, u32)>>>, // ip → (window_start, count)
     max_per_sec: u32,
 }
 
@@ -123,15 +123,12 @@ impl IpRateLimiter {
     /// Also cleans up stale entries older than 2 seconds.
     pub fn check(&self, ip: IpAddr) -> bool {
         if self.max_per_sec == 0 { return true; }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64; // millisecond precision — avoids second-boundary flakiness
+        let now = Instant::now();
         let mut w = self.window.lock().unwrap();
         // Cleanup stale entries (older than 2 seconds)
-        w.retain(|_, (ts, _)| now.saturating_sub(*ts) <= 2000);
+        w.retain(|_, (ts, _)| now.saturating_duration_since(*ts).as_millis() <= 2000);
         let entry = w.entry(ip).or_insert((now, 0));
-        if now.saturating_sub(entry.0) > 1000 {
+        if now.saturating_duration_since(entry.0).as_millis() > 1000 {
             // New second window — reset count
             entry.0 = now;
             entry.1 = 1;
@@ -291,9 +288,12 @@ async fn handle_webhook(
     body: Bytes,
 ) -> impl IntoResponse {
     // ── Multi-recipient: signatures array in payload, no x-batch header ──
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
-        if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
-            return handle_batch_webhook(axum::extract::State(state), body).await;
+    // Fast pre-check: only parse JSON if the body starts like a signatures payload
+    if body.starts_with(b"{\"signatures\":") {
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+                return handle_batch_webhook(axum::extract::State(state), body).await;
+            }
         }
     }
 
@@ -327,17 +327,24 @@ async fn handle_webhook(
 
     // Forward only business headers — avoid leaking Host, Content-Length, etc.
     // This whitelist is intentionally narrow: each header must have a known purpose.
-    // Adding a new relay→gateway header? Add it here.
+    // Adding a new relay→gateway header? Add it here and to the static list below.
+    use std::sync::LazyLock as Lazy;
+    static FWD_HEADERS: Lazy<[(HeaderName, &'static str); 4]> = Lazy::new(|| [
+        (HeaderName::from_static("x-amail-email"), "x-amail-email"),
+        (HeaderName::from_static("x-webhook-signature"), "x-webhook-signature"),
+        (HeaderName::from_static("x-mailrelay-timestamp"), "x-mailrelay-timestamp"),
+        (HeaderName::from_static("content-type"), "content-type"),
+    ]);
     let mut fwd_headers = HeaderMap::new();
-    for name in &["x-amail-email", "x-webhook-signature", "x-mailrelay-timestamp", "content-type"] {
-        if let Some(val) = headers.get(*name) {
-            fwd_headers.insert(HeaderName::from_static(name), val.clone());
+    for (name, lookup) in FWD_HEADERS.iter() {
+        if let Some(val) = headers.get(*lookup) {
+            fwd_headers.insert(name.clone(), val.clone());
         }
     }
 
     match state
         .http_client
-        .post(&target)
+        .post(target)
         .headers(fwd_headers)
         .body(body)
         .send()
@@ -535,7 +542,7 @@ async fn handle_batch_webhook(
         let ts = entry["timestamp"].as_str().unwrap_or("");
 
         match state.http_client
-            .post(&target)
+            .post(target)
             .header("x-amail-email", email)
             .header("x-webhook-signature", sig)
             .header("x-mailrelay-timestamp", ts)
