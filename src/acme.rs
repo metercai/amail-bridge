@@ -48,7 +48,6 @@ pub async fn get_or_acquire_cert(
     cache_dir: &Path,
     acme_email: Option<&str>,
 ) -> Result<(AcmeCertPaths, AcmeStopToken), Box<dyn std::error::Error + Send + Sync>> {
-    tracing::trace!(%domain, "ACME: get_or_acquire_cert called");
     std::fs::create_dir_all(cache_dir)?;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -300,7 +299,7 @@ async fn renew_loop(
     email: Option<&str>,
     stop: Arc<AtomicBool>,
 ) {
-    tracing::trace!(%domain, "ACME renew loop iteration");
+    tracing::info!(%domain, "ACME renew loop check");
     let cert_path = cache_dir.join(format!("{}.cert.pem", domain));
     let renew_age = Duration::from_secs(60 * 86400);
 

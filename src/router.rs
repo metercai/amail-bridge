@@ -70,7 +70,6 @@ impl ProfileRouter {
         drop(routes);
         self.write_routes_file();
 
-        tracing::trace!("Profile scan started");
         tracing::info!(count, "Profile scan complete");
     }
 
@@ -175,7 +174,6 @@ impl ProfileRouter {
 
     /// Look up the route for a given agent email address.
     pub fn lookup(&self, email: &str) -> Option<ProfileRoute> {
-        tracing::trace!(%email, "Route lookup");
         self.routes.read().unwrap_or_else(|e| e.into_inner())
             .get(email).cloned()
     }
@@ -187,7 +185,6 @@ impl ProfileRouter {
 
     /// Return all known agent emails (for pull-mode email filtering).
     pub fn list_emails(&self) -> Vec<String> {
-        tracing::trace!("Listing all known emails");
         self.routes.read().unwrap_or_else(|e| e.into_inner())
             .keys().cloned().collect()
     }

@@ -247,7 +247,7 @@ async fn async_main(
                 std::future::pending::<()>().await;
             } => {},
         }
-        tracing::trace!("Shutdown signal received, initiating graceful shutdown...");
+        tracing::info!("Shutdown signal received, initiating graceful shutdown...");
         shutdown_clone.store(true, Ordering::SeqCst);
     });
 
