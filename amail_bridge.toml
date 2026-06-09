@@ -1,5 +1,5 @@
 # ── amail-bridge configuration ─────────────────────────────────────
-# Docs: https://github.com/nousresearch/amail-bridge
+# Config format aligned with amail-gateway (host:port, hostname→TLS).
 
 mode = "pull"  # "push" or "pull"
 
@@ -8,25 +8,35 @@ mode = "pull"  # "push" or "pull"
 # Agents not matching any pattern default to 127.0.0.1 (same-machine).
 #
 [hosts]
+
 ".*@admin.relay"    = "192.168.1.2"    # all agents on this domain → this host
 "bob@.*"            = "192.168.1.11"   # bob on any domain → this host
 "alice@admin.relay" = "192.168.1.10"   # exact match (precise overrides first)
 
+# ── Pull mode (bridge polls relay outbound) ───────────────────────
+[pull]
+relay_url = "http://192.168.1.1:38080"
+admin_key = "sk-..."   # system_admin API key from relay
+system_id = "admin"
+poll_interval_sec = 10
+
 # ── Push mode (bridge receives external POSTs) ────────────────────
-[push]
-bind_host = "0.0.0.0"
-bind_port = 38080
-tls = false
-# public_url = "https://bridge.example.com"   # Printed at startup for relay config
-# tls_cert = "/etc/ssl/bridge.crt"            # Required when tls = true
+# addr: listen address in "host:port" format.
+# hostname: when set → TLS enabled (static cert or ACME auto-cert).
+#   If port=80 + hostname set → dual-port mode (80→443 redirect).
+#
+# [push]
+# addr = "0.0.0.0:38080"
+# hostname = "bridge.example.com"      # enables TLS
+# tls_cert = "/etc/ssl/bridge.crt"     # static cert (optional, ACME fallback)
 # tls_key  = "/etc/ssl/bridge.key"
+# acme_cache = "/var/cache/acme"       # ACME cache dir (default: ~/.hermes/acme)
 # blacklist_ips = ["1.2.3.4", "10.0.0.0/8"]  # permanently blocked IPs/CIDRs
 # allowed_ips = ["10.0.0.0/8", "192.168.1.1"]  # IP allowlist (empty = allow all)
 # rate_limit = 30                               # req/sec per source IP (0 = disabled)
 # body_limit_mb = 20                            # max request body size in MB
 
 # ── Virtual host sites (optional, push mode only) ─────────────────
-# Each site maps a domain to static files, a reverse proxy, or a redirect.
 # [[push.sites]]
 # domain = "www.example.com"
 # root = "/var/www/example"                  # static site
@@ -38,10 +48,3 @@ tls = false
 # [[push.sites]]
 # domain = "old.example.com"
 # redirect = "https://www.example.com"       # 308 redirect
-
-# ── Pull mode (bridge polls relay outbound) ───────────────────────
-[pull]
-relay_url = "http://192.168.1.1:38080"
-admin_key = "sk-..."   # system_admin API key from relay
-system_id = "admin"
-poll_interval_sec = 10

@@ -1,4 +1,5 @@
 //! Bridge configuration: `amail_bridge.toml` + env var overrides.
+//! Config format aligned with amail-gateway.
 
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -54,29 +55,34 @@ fn deserialize_hosts_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct PushConfig {
-    #[serde(default = "default_bind_host")]
-    pub bind_host: String,
-    #[serde(default = "default_push_port")]
-    pub bind_port: u16,
+    /// Listen address in "host:port" format (e.g. "0.0.0.0:38080").
+    /// When port = 80 and hostname is set → dual-port mode (80 → 443 redirect).
+    #[serde(default = "default_push_addr")]
+    pub addr: String,
+
+    /// Public hostname for TLS (e.g. "bridge.example.com").
+    /// When set:
+    ///   - TLS is enabled (tls_cert/tls_key or ACME auto-cert)
+    ///   - If addr port == 80 → dual-port mode (80 redirects to 443)
+    ///   - Printed at startup as a hint for relay config
     #[serde(default)]
-    pub tls: bool,
-    /// Full externally-accessible URL (without trailing path), e.g. "https://bridge.example.com".
-    /// Printed at startup as a hint for the admin to copy into `amail_relay.json`.
-    #[serde(default)]
-    pub public_url: String,
+    pub hostname: Option<String>,
+
+    /// Optional static TLS certificate path (PEM format).
     #[serde(default)]
     pub tls_cert: Option<PathBuf>,
+
+    /// Optional static TLS private key path (PEM format).
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
+
+    /// ACME certificate cache directory. Defaults to ~/.hermes/acme.
     #[serde(default)]
     pub acme_cache: Option<PathBuf>,
-    #[serde(default)]
-    pub redirect_http: bool,
-    /// IP/CIDR allowlist for DDoS protection.  Only requests from
-    /// these addresses can POST webhooks.  Empty = allow all.
-    /// Example: `allowed_ips = ["10.0.0.0/8", "192.168.1.1"]`
+
+    /// IP/CIDR allowlist for DDoS protection. Only requests from
+    /// these addresses can POST webhooks. Empty = allow all.
     #[serde(default)]
     pub allowed_ips: Vec<String>,
 
@@ -97,17 +103,43 @@ pub struct PushConfig {
     pub sites: Vec<VhostSiteConfig>,
 }
 
+impl PushConfig {
+    /// Returns true if TLS should be enabled (hostname is set).
+    pub fn has_tls(&self) -> bool {
+        self.hostname.is_some()
+    }
+
+    /// Parse `addr` into (host, port). If no port is specified, defaults to 80.
+    pub fn parsed_addr(&self) -> (&str, u16) {
+        if let Some((host, port_str)) = self.addr.rsplit_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                return (host, port);
+            }
+        }
+        (&self.addr, 80)
+    }
+
+    /// True when dual-port mode (80 + 443) should be enabled.
+    /// Conditions: addr port == 80 AND hostname is set.
+    pub fn is_dual_port(&self) -> bool {
+        let (_, port) = self.parsed_addr();
+        port == 80 && self.hostname.is_some()
+    }
+
+    /// Return the hostname or an empty string for display.
+    pub fn hostname_or_empty(&self) -> &str {
+        self.hostname.as_deref().unwrap_or("")
+    }
+}
+
 impl Default for PushConfig {
     fn default() -> Self {
         Self {
-            bind_host: "0.0.0.0".into(),
-            bind_port: 38080,
-            tls: false,
-            public_url: String::new(),
+            addr: "0.0.0.0:38080".into(),
+            hostname: None,
             tls_cert: None,
             tls_key: None,
             acme_cache: None,
-            redirect_http: false,
             allowed_ips: Vec::new(),
             blacklist_ips: Vec::new(),
             rate_limit: 30,
@@ -146,8 +178,7 @@ pub struct PullConfig {
 
 // Default helpers
 fn default_mode() -> String { "pull".into() }
-fn default_bind_host() -> String { "0.0.0.0".into() }
-fn default_push_port() -> u16 { 38080 }
+fn default_push_addr() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
 
 impl Default for PullConfig {
@@ -174,7 +205,7 @@ impl BridgeConfig {
 
         // Env overrides
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_MODE") { cfg.mode = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_PUBLIC_URL") { cfg.push.public_url = v; }
+        if let Ok(v) = std::env::var("AMAIL_BRIDGE_HOSTNAME") { cfg.push.hostname = Some(v); }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_RELAY_URL") { cfg.pull.relay_url = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_ADMIN_KEY") { cfg.pull.admin_key = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
@@ -190,14 +221,15 @@ impl BridgeConfig {
 
         // Push/pull are mutually exclusive — push wins because it has
         // lower latency and better efficiency when a public IP is available.
-        // A configured push section (public_url, tls_cert, or non-default
-        // bind_port) overrides an explicit pull mode.
-        let push_configured = !cfg.push.public_url.is_empty()
+        // A configured push section (hostname, tls_cert, or non-default addr)
+        // overrides an explicit pull mode.
+        let push_configured = cfg.push.hostname.is_some()
             || cfg.push.tls_cert.is_some()
-            || cfg.push.tls_key.is_some();
+            || cfg.push.tls_key.is_some()
+            || cfg.push.addr != *"0.0.0.0:38080";
         if cfg.mode == "pull" && push_configured {
             tracing::warn!(
-                "Push config detected (public_url/tls_cert) but mode is 'pull' — \
+                "Push config detected (hostname/tls_cert) but mode is 'pull' — \
                  push has lower latency, switching to push mode"
             );
             cfg.mode = "push".to_string();
@@ -225,11 +257,11 @@ impl BridgeConfig {
                 tracing::warn!("pull.system_id is empty — pending query will fail");
             }
         }
-        if self.mode == "push" && !self.push.tls && !self.push.public_url.is_empty() {
-            tracing::warn!("push.public_url is set but TLS is disabled — consider enabling TLS");
+        if self.mode == "push" && self.push.hostname.is_some() && self.push.tls_cert.is_none() && self.push.tls_key.is_none() {
+            tracing::info!("push.hostname is set — will attempt ACME auto-certificate");
         }
-        if self.push.tls && self.push.bind_port == 80 {
-            tracing::warn!("TLS enabled on port 80 — usually port 443 is expected");
+        if self.push.is_dual_port() {
+            tracing::info!("push: dual-port mode enabled (port 80 → 443)");
         }
     }
 
@@ -254,12 +286,20 @@ mod tests {
 
     #[test]
     fn test_defaults() {
-        let cfg: BridgeConfig = toml::from_str("mode = \"pull\"\n[pull]\nrelay_url = \"http://x\"\nadmin_key = \"k\"\nsystem_id = \"s\"\n").unwrap();
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+relay_url = "http://x"
+admin_key = "k"
+system_id = "s"
+"#).unwrap();
         assert_eq!(cfg.mode, "pull");
         assert_eq!(cfg.push.body_limit_mb, 20);
         assert_eq!(cfg.push.rate_limit, 30);
         assert!(cfg.push.blacklist_ips.is_empty());
         assert!(cfg.push.allowed_ips.is_empty());
+        assert_eq!(cfg.push.addr, "0.0.0.0:38080");
+        assert!(cfg.push.hostname.is_none());
     }
 
     #[test]
@@ -267,6 +307,8 @@ mod tests {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
 [push]
+addr = "0.0.0.0:8080"
+hostname = "bridge.example.com"
 blacklist_ips = ["1.2.3.4"]
 allowed_ips = ["10.0.0.0/8"]
 rate_limit = 100
@@ -275,6 +317,31 @@ body_limit_mb = 50
         assert_eq!(cfg.push.rate_limit, 100);
         assert_eq!(cfg.push.body_limit_mb, 50);
         assert_eq!(cfg.push.blacklist_ips, vec!["1.2.3.4"]);
+        assert_eq!(cfg.push.addr, "0.0.0.0:8080");
+        assert_eq!(cfg.push.hostname, Some("bridge.example.com".into()));
+        assert!(cfg.push.has_tls());
+        assert!(!cfg.push.is_dual_port()); // port is 8080, not 80
+    }
+
+    #[test]
+    fn test_dual_port_detection() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+addr = "0.0.0.0:80"
+hostname = "example.com"
+"#).unwrap();
+        assert!(cfg.push.is_dual_port());
+    }
+
+    #[test]
+    fn test_no_tls_without_hostname() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+addr = "0.0.0.0:38080"
+"#).unwrap();
+        assert!(!cfg.push.has_tls());
     }
 
     #[test]
@@ -295,4 +362,3 @@ redirect = "https://www.example.com"
         assert_eq!(cfg.push.sites[1].redirect.as_deref(), Some("https://www.example.com"));
     }
 }
-

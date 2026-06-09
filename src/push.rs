@@ -257,8 +257,8 @@ async fn health(State(state): State<PushState>) -> String {
     format!(
         "amail-bridge push mode OK\nroutes: {}\nbinding: {}:{}\n",
         state.router.route_count(),
-        state.config.push.bind_host,
-        state.config.push.bind_port,
+        state.config.push.parsed_addr().0,
+        state.config.push.parsed_addr().1,
     )
 }
 
@@ -364,19 +364,18 @@ pub async fn start_push_server(
 
     let app = build_push_router(state);
 
-    let addr: SocketAddr = format!("{}:{}", config.push.bind_host, config.push.bind_port)
-        .parse()?;
+    let addr: SocketAddr = config.push.addr.parse()?;
 
     // Print bridge URL hint for admin
-    if !config.push.public_url.is_empty() {
+    let hostname = config.push.hostname_or_empty();
+    if !hostname.is_empty() {
         let bridge_url = format!(
-            "{}/webhooks/amail-inbound",
-            config.push.public_url.trim_end_matches('/')
+            "https://{}/webhooks/amail-inbound",
+            hostname
         );
         tracing::info!("======================================================");
         tracing::info!("  amail-bridge (push mode) running on {}", addr);
-        tracing::info!("  Public URL: {}", config.push.public_url);
-        tracing::info!("  TLS: {}", if config.push.tls { "enabled" } else { "disabled" });
+        tracing::info!("  Hostname: {} ({})", hostname, if config.push.has_tls() { "TLS" } else { "plain" });
         tracing::info!("  Add this to ~/.hermes/amail_relay.json:");
         tracing::info!("    \"bridge_url\": \"{}\"", bridge_url);
         tracing::info!("======================================================");
@@ -384,40 +383,30 @@ pub async fn start_push_server(
         tracing::info!("amail-bridge (push mode) running on {}", addr);
     }
 
-    if config.push.tls {
+    if config.push.has_tls() {
         // Determine TLS cert source: static files > ACME > HTTP fallback
         let mut acme_stop: Option<Arc<AtomicBool>> = None;
 
         let (cert_path, key_path) = if config.push.tls_cert.is_some() && config.push.tls_key.is_some() {
             (config.push.tls_cert.clone().unwrap(), config.push.tls_key.clone().unwrap())
-        } else if !config.push.public_url.is_empty() {
-            match crate::acme::extract_domain(&config.push.public_url) {
-                Some(domain) => {
-                    let cache = config.push.acme_cache.clone()
-                        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
-                    tracing::info!(%domain, cache = %cache.display(), "Attempting ACME certificate...");
-                    match crate::acme::get_or_acquire_cert(&domain, &cache, None).await {
-                        Ok((paths, stop)) => {
-                            tracing::info!("ACME succeeded — using auto-cert");
-                            acme_stop = Some(stop);
-                            (paths.cert, paths.key)
-                        }
-                        Err(e) => {
-                            tracing::warn!(%domain, error = %e,
-                                "ACME certificate acquisition failed — falling back to HTTP");
-                            return start_push_http(shutdown, app, addr).await;
-                        }
-                    }
+        } else if let Some(ref hostname) = config.push.hostname {
+            let cache = config.push.acme_cache.clone()
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
+            tracing::info!(%hostname, cache = %cache.display(), "Attempting ACME certificate...");
+            match crate::acme::get_or_acquire_cert(hostname, &cache, None).await {
+                Ok((paths, stop)) => {
+                    tracing::info!("ACME succeeded — using auto-cert");
+                    acme_stop = Some(stop);
+                    (paths.cert, paths.key)
                 }
-                None => {
-                    tracing::warn!("Cannot extract domain from public_url '{}' — falling back to HTTP",
-                                   config.push.public_url);
+                Err(e) => {
+                    tracing::warn!(%hostname, error = %e,
+                        "ACME certificate acquisition failed — falling back to HTTP");
                     return start_push_http(shutdown, app, addr).await;
                 }
             }
         } else {
-            tracing::warn!("TLS enabled but no cert config — falling back to HTTP");
-            return start_push_http(shutdown, app, addr).await;
+            unreachable!() // has_tls() ensures hostname is set
         };
 
         let tls_config = build_tls_config_from_paths(&cert_path, &key_path)?;

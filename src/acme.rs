@@ -2,7 +2,7 @@
 //!
 //! ## Flow
 //!
-//! 1. Extract domain from `push.public_url` (caller).
+//! 1. Extract domain from caller (hostname from config).
 //! 2. Check if a previously-acquired certificate is still valid (< 60 days old).
 //! 3. If valid → reuse (skip ACME request, avoid LE rate limits on restart).
 //! 4. If absent or expired → request via HTTP-01 challenge (port 80).
@@ -36,21 +36,6 @@ pub struct AcmeCertPaths {
 /// Set to `true` on graceful shutdown.  The task checks this flag every
 /// 10 seconds and exits cleanly.
 pub type AcmeStopToken = Arc<AtomicBool>;
-
-// ── Public helpers ────────────────────────────────────────────────
-
-/// Extract the bare domain from a public URL.
-pub fn extract_domain(public_url: &str) -> Option<String> {
-    let s = public_url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let domain = s.split(':').next()?.split('/').next()?;
-    if domain.is_empty() {
-        None
-    } else {
-        Some(domain.to_string())
-    }
-}
 
 // ── Public entry point ────────────────────────────────────────────
 
