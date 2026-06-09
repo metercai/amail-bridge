@@ -2,7 +2,7 @@
 
 > Zero ports, email inbound. One port, instant forwarding to all agents.
 
-A high-performance transparent bridge between [amail relay](https://github.com/nousresearch/agent-mail-relay)
+A high-performance transparent bridge between [amail-gateway](https://github.com/metercai/amail-gateway)
 and [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook endpoints.
 Solves firewall penetration for heterogeneous multi-agent deployments with minimal
 surface area.

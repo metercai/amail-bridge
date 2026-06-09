@@ -2,7 +2,7 @@
 
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
 
-连接 [amail relay](https://github.com/nousresearch/agent-mail-relay) 和
+连接 [amail-gateway](https://github.com/metercai/amail-gateway) 和
 [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook 端点的
 高性能透明桥接。以最小攻击面解决异构多 agent 部署的防火墙穿透问题。
 
