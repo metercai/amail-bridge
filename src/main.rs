@@ -238,6 +238,7 @@ async fn async_main(
     config.validate();
     let router = Arc::new(router::ProfileRouter::new(
         &config.default_profile_dir,
+        config.routes_file.clone(),
     ));
 
     if let Err(e) = router::start_watcher(router.clone()) {

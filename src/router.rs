@@ -55,6 +55,7 @@ impl ProfileRoute {
 pub struct ProfileRouter {
     routes: RwLock<HashMap<String, ProfileRoute>>,
     profiles_dir: PathBuf,
+    routes_file: PathBuf,
     /// Regex patterns loaded from routes file, kept for lookup-time fallback.
     /// Each entry: (compiled_regex, raw_key_string, host, port).
     regex_patterns: RwLock<Vec<(regex::Regex, String, String, u16)>>,
@@ -63,10 +64,11 @@ pub struct ProfileRouter {
 }
 
 impl ProfileRouter {
-    pub fn new(hermes_home: &Path) -> Self {
+    pub fn new(hermes_home: &Path, routes_file: PathBuf) -> Self {
         Self {
             routes: RwLock::new(HashMap::new()),
             profiles_dir: hermes_home.join("profiles"),
+            routes_file,
             regex_patterns: RwLock::new(Vec::new()),
             writing_routes: AtomicBool::new(false),
         }
@@ -227,7 +229,7 @@ impl ProfileRouter {
     }
 
     fn routes_file_path(&self) -> Option<PathBuf> {
-        self.profiles_dir.parent().map(|p| p.join("amail-routes.toml"))
+        Some(self.routes_file.clone())
     }
 
     fn load_route(&self, dir: &Path) -> Option<ProfileRoute> {
@@ -481,7 +483,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let prof = tmp.path().join("profiles").join("test-agent");
         make_profile(&prof, "alice@x.com", 8645);
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         let route = router.load_route(&prof).unwrap();
         assert_eq!(route.email, "alice@x.com");
         assert_eq!(route.host, "127.0.0.1");
@@ -496,7 +498,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("profiles")).unwrap();
         let prof = tmp.path().join("profiles").join("a1");
         make_profile(&prof, "a1@t.local", 8001);
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         assert_eq!(router.route_count(), 1);
         assert!(router.lookup("a1@t.local").is_some());
@@ -509,7 +511,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("profiles")).unwrap();
         let prof = tmp.path().join("profiles").join("a1");
         make_profile(&prof, "a1@t.local", 8001);
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         // Routes file should exist after full_scan
         let routes_file = tmp.path().join("amail-routes.toml");
@@ -529,7 +531,7 @@ mod tests {
         // Write routes file with a manual override BEFORE full_scan
         let routes_file = tmp.path().join("amail-routes.toml");
         std::fs::write(&routes_file, r#""a1@t.local" = "10.0.0.5:9999""#).unwrap();
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         // The file's override should take precedence
         let route = router.lookup("a1@t.local").unwrap();
@@ -543,7 +545,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("profiles")).unwrap();
         let prof = tmp.path().join("profiles").join("a1");
         make_profile(&prof, "a1@t.local", 8001);
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         // First scan: auto-discovered
         let route1 = router.lookup("a1@t.local").unwrap();
@@ -567,7 +569,7 @@ mod tests {
         let routes_file = tmp.path().join("amail-routes.toml");
         std::fs::write(&routes_file,
             r#""remote@admin.relay" = "192.168.1.100:8645""#).unwrap();
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         // Entry has no matching profile and contains no regex metacharacters —
         // not a pattern, not an exact email. Ignored entirely.
@@ -588,7 +590,7 @@ mod tests {
         // Write routes file with a regex pattern (also "host:port" format)
         let routes_file = tmp.path().join("amail-routes.toml");
         std::fs::write(&routes_file, r#"".*@admin" = "10.0.0.88:8765""#).unwrap();
-        let router = ProfileRouter::new(tmp.path());
+        let router = ProfileRouter::new(tmp.path(), tmp.path().join("amail-routes.toml"));
         router.full_scan();
         // The host and port should come from the regex pattern
         let route = router.lookup("a1@admin.relay").unwrap();

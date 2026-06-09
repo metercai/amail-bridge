@@ -784,7 +784,7 @@ mod tests {
     async fn test_health_response_shape() {
         use std::time::Instant;
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -801,7 +801,7 @@ mod tests {
     async fn test_handle_webhook_missing_email() {
         use axum::body::Bytes;
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -818,7 +818,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_batch_webhook_invalid_json() {
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -833,7 +833,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_batch_webhook_missing_signatures() {
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -848,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_batch_webhook_empty_signatures() {
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -863,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_batch_webhook_entry_without_email() {
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]
@@ -879,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_batch_webhook_partial_delivery_no_route() {
         let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
             http_client: reqwest::Client::new(),
             config: toml::from_str(r#"mode = "push"
 [push]

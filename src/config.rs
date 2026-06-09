@@ -2,7 +2,7 @@
 //! Config format aligned with amail-gateway.
 
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Full bridge configuration, deserialised from `amail_bridge.toml`.
 #[derive(Debug, Clone, Deserialize)]
@@ -23,6 +23,10 @@ pub struct BridgeConfig {
     /// Path to the Hermes default profile (~/.hermes/). Computed at startup.
     #[serde(skip)]
     pub default_profile_dir: PathBuf,
+
+    /// Path to amail-routes.toml (default: alongside amail_bridge.toml).
+    #[serde(skip)]
+    pub routes_file: PathBuf,
 
     /// Per-agent host overrides (deprecated — use amail-routes.toml [hosts]).
     #[serde(default, deserialize_with = "deserialize_hosts_vec")]
@@ -264,6 +268,7 @@ impl BridgeConfig {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".hermes")
         });
         cfg.default_profile_dir = hermes_root;
+        cfg.routes_file = config_path.parent().unwrap_or(Path::new(".")).join("amail-routes.toml");
 
         Ok(cfg)
     }
