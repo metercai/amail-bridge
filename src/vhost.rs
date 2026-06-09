@@ -139,9 +139,19 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
             // Extract headers and method before consuming req body
             let method = req.method().clone();
             let mut req_headers = req.headers().clone();
-            // Remove incoming Host header — the backend needs its own,
-            // not the one the client sent to us.
+            // Save original Host as X-Forwarded-Host, then remove it.
+            let original_host = req_headers
+                .get("host")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             req_headers.remove("host");
+            req_headers.insert("x-forwarded-host",
+                axum::http::HeaderValue::from_str(&original_host).unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")));
+            req_headers.insert("x-forwarded-proto",
+                axum::http::HeaderValue::from_static("https"));
+            req_headers.insert("x-forwarded-for",
+                axum::http::HeaderValue::from_static("unknown"));
 
             // Convert axum Body to bytes for reqwest (10MB limit for proxy req bodies)
             let axum_body = req.into_body();
