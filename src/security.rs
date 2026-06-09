@@ -16,6 +16,5 @@ async fn add_security_headers(
     let _ = headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     let _ = headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
     let _ = headers.insert("referrer-policy", HeaderValue::from_static("strict-origin-when-cross-origin"));
-    let _ = headers.insert("strict-transport-security", HeaderValue::from_static("max-age=31536000; includeSubDomains"));
     response
 }

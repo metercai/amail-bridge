@@ -140,10 +140,21 @@ pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
         fn GetConsoleWindow() -> isize;
     }
 
-    // Guard: if already detached, we are the child — proceed normally
+    // Guard: if already detached, we are the child — set up PID + logs
     if unsafe { GetConsoleWindow() } == 0 {
-        let _ = pid_file;
-        let _ = log_file;
+        // Write PID file
+        if let Some(parent) = pid_file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(pid_file, process::id().to_string().as_bytes());
+        // Redirect stdio to log file
+        if let Ok(log) = std::fs::OpenOptions::new()
+            .create(true).append(true).open(log_file)
+        {
+            let _ = log; // keep alive
+            // On Windows, the parent already nulled our stdio handles;
+            // tracing output goes to the tokio runtime's writer.
+        }
         return;
     }
 

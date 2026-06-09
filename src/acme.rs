@@ -11,6 +11,8 @@
 //!
 //! Uses `instant-acme` — pure Rust (ring crypto), zero OpenSSL dependency.
 //!
+//! **Requires** the binary to have permission to bind port 80 for
+//! HTTP-01 challenge validation (root or CAP_NET_BIND_SERVICE on Linux).
 //! On any failure the caller should fall back to plain HTTP with a warning.
 
 #[cfg(unix)]

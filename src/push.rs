@@ -321,6 +321,8 @@ async fn handle_webhook(
     tracing::info!(email = %email, host = %route.host, port = route.port, target = %target, "Webhook relayed");
 
     // Forward only business headers — avoid leaking Host, Content-Length, etc.
+    // This whitelist is intentionally narrow: each header must have a known purpose.
+    // Adding a new relay→gateway header? Add it here.
     let mut fwd_headers = HeaderMap::new();
     for name in &["x-amail-email", "x-webhook-signature", "x-mailrelay-timestamp", "content-type"] {
         if let Some(val) = headers.get(*name) {

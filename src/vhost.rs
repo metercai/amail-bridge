@@ -138,7 +138,10 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
 
             // Extract headers and method before consuming req body
             let method = req.method().clone();
-            let req_headers = req.headers().clone();
+            let mut req_headers = req.headers().clone();
+            // Remove incoming Host header — the backend needs its own,
+            // not the one the client sent to us.
+            req_headers.remove("host");
 
             // Convert axum Body to bytes for reqwest (10MB limit for proxy req bodies)
             let axum_body = req.into_body();
