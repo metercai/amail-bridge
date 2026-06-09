@@ -53,18 +53,14 @@ SIGINT/SIGTERM 优雅排空。
 
 `[hosts]` 表以正则匹配 agent 邮箱 → 主机 IP，首匹配即胜，未匹配默认 `127.0.0.1`。
 从 Hermes profiles（`~/.hermes/profiles/*/amail.json` + `config.yaml`）自动发现，
-所有路由定义在单一文件 `~/.hermes/amail-routes.toml`：
+单个 bridge 可桥接多个机器上的 agent。
+本机 `~/.hermes/profiles/*/` 自动发现，`amail-routes.toml` 中的条目覆盖自动发现。
+inotify 热更新，修改即时生效。
 
 ```toml
-# 精确邮箱 → 完整地址（最高优先级）
 "alice@admin.relay" = "127.0.0.1:8645"
-
-# 正则模式 → host:port（展开到所有匹配邮箱）
 ".*@admin.relay" = "192.168.1.2:8645"
 ```
-
-本机自动发现的 profile 自动追加到文件。手动条目覆盖自动发现。
-inotify 同时监听 profiles 目录和 routes 文件，修改即时生效。
 
 ### 安全加固
 

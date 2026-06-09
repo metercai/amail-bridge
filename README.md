@@ -56,21 +56,17 @@ sends a **single body copy** with per-recipient headers — bridge fans out to
 each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
 
-### Unified route configuration — amail-routes.toml
+### Multi-machine bridge routing — amail-routes.toml
 
-All routing is defined in a single file (`~/.hermes/amail-routes.toml`):
+A single bridge can route emails to agents on multiple machines.
+Local agent profiles (`~/.hermes/profiles/*/`) are auto-discovered;
+entries in `amail-routes.toml` override them. inotify hot-reloads
+on changes.
 
 ```toml
-# Exact email → full address (highest priority)
 "alice@admin.relay" = "127.0.0.1:8645"
-
-# Regex pattern → host:port (expanded to all matching emails)
-".*@admin\.relay" = "192.168.1.2:8645"
+".*@admin\\.relay" = "192.168.1.2:8645"
 ```
-
-Auto-discovered local profiles (`~/.hermes/profiles/*/`) are added to the file
-automatically. Manual file entries override auto-discovery on next rescan.
-inotify watches both profiles and the routes file — edits take effect immediately.
 
 ### Security hardening
 
