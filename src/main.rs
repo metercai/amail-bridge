@@ -74,6 +74,7 @@ pub fn parse_args() -> CliArgs {
 
 /// Double-fork daemonize: detach from terminal, redirect stdio.
 /// MUST be called BEFORE any tokio runtime is created.
+#[cfg(unix)]
 pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
     // Ensure log directory exists
     if let Some(parent) = log_file.parent() {
@@ -123,6 +124,14 @@ pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
         eprintln!("Cannot write PID file {:?}: {}", pid_file, e);
         process::exit(1);
     }
+}
+
+/// Daemon mode is not available on non-Unix platforms.
+/// Use the platform's native service manager instead (launchd, sc.exe, etc.).
+#[cfg(not(unix))]
+pub fn daemonize(_pid_file: &PathBuf, _log_file: &PathBuf) {
+    eprintln!("--daemon is not supported on this platform. Use the native service manager.");
+    process::exit(1);
 }
 
 // ── entry point ────────────────────────────────────────────────────────

@@ -11,33 +11,54 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            artifact: amail-bridge-linux-amd64-${{ github.ref_name }}
+            os: ubuntu-latest
+            artifact: amail-bridge-linux-amd64
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: amail-bridge-macos-amd64
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: amail-bridge-macos-arm64
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: amail-bridge-windows-amd64
+            ext: ".exe"
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install deps (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/release/amail-bridge ${{ matrix.artifact }}
+        shell: bash
+        run: |
+          cp target/${{ matrix.target }}/release/amail-bridge${{ matrix.ext }} \
+             ${{ matrix.artifact }}-${{ github.ref_name }}${{ matrix.ext }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: ${{ matrix.artifact }}-${{ github.ref_name }}
+          path: ${{ matrix.artifact }}-${{ github.ref_name }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -48,6 +69,6 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: amail-bridge-linux-amd64-${{ github.ref_name }}/amail-bridge-linux-amd64-${{ github.ref_name }}
+          files: amail-bridge-*/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

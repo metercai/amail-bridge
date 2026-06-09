@@ -22,7 +22,6 @@ tokio = { version = "1", features = ["full"] }
 
 notify = "6"
 dirs = "5"
-libc = "0.2"
 regex = "1"
 
 tracing = "0.1"
@@ -30,6 +29,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 log = "0.4"
 
 acme-micro = "0.14"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 default = ["tls"]

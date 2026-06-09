@@ -12,6 +12,7 @@
 //!
 //! On any failure the caller should fall back to plain HTTP with a warning.
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,9 +185,18 @@ fn acquire_cert_inner(
 // ── Permissions ───────────────────────────────────────────────────
 
 fn set_key_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(path, perms)?;
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows/macOS, this is a no-op — use the platform's native
+        // access control if tighter permissions are required.
+        let _ = path;
+    }
     Ok(())
 }
 
