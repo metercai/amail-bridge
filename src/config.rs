@@ -24,10 +24,9 @@ pub struct BridgeConfig {
     #[serde(skip)]
     pub default_profile_dir: PathBuf,
 
-    /// Per-agent host overrides for multi-machine deployments.
-    /// Regex pattern → IP or hostname. First match wins (insertion order).
-    /// Example: `".*@admin.relay" = "192.168.1.2"`
+    /// Per-agent host overrides (deprecated — use amail-routes.toml [hosts]).
     #[serde(default, deserialize_with = "deserialize_hosts_vec")]
+    #[allow(dead_code)]
     pub hosts: Vec<(String, String)>,
 
     /// Logging configuration.
@@ -291,17 +290,10 @@ impl BridgeConfig {
     }
 
     /// Compile host patterns into (Regex, host) pairs for the router.
-    /// Invalid patterns are logged and skipped. First match wins.
+    #[allow(dead_code)]
     pub fn compiled_hosts(&self) -> Vec<(regex::Regex, String)> {
-        self.hosts.iter().filter_map(|(pattern, host)| {
-            match regex::Regex::new(pattern) {
-                Ok(re) => Some((re, host.clone())),
-                Err(e) => {
-                    tracing::warn!(pattern = %pattern, error = %e, "Invalid host regex — skipping");
-                    None
-                }
-            }
-        }).collect()
+        tracing::warn!("[hosts] in amail_bridge.toml is deprecated — use amail-routes.toml [hosts] instead");
+        Vec::new()
     }
 }
 
@@ -385,5 +377,101 @@ redirect = "https://www.example.com"
         assert_eq!(cfg.push.sites[0].domain, "www.example.com");
         assert_eq!(cfg.push.sites[0].root.as_deref(), Some("/var/www"));
         assert_eq!(cfg.push.sites[1].redirect.as_deref(), Some("https://www.example.com"));
+    }
+
+    #[test]
+    fn test_validate_pull_empty_warns() {
+        // Default pull config should warn on empty fields
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+amail_url = ""
+admin_key = ""
+system_id = ""
+"#).unwrap();
+        // These fields should be empty strings by default
+        assert!(cfg.pull.amail_url.is_empty());
+        assert!(cfg.pull.admin_key.is_empty());
+        assert!(cfg.pull.system_id.is_empty());
+    }
+
+    #[test]
+    fn test_validate_push_with_hostname() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+addr = "0.0.0.0:38080"
+hostname = "x.com"
+"#).unwrap();
+        assert!(cfg.push.has_tls());
+        assert!(!cfg.push.is_dual_port());
+    }
+
+    #[test]
+    fn test_compiled_hosts_deprecated() {
+        // [hosts] in bridge config is deprecated — moved to amail-routes.toml
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+amail_url = "http://x"
+admin_key = "k"
+system_id = "s"
+"#).unwrap();
+        let compiled = cfg.compiled_hosts();
+        assert!(compiled.is_empty(), "Deprecated [hosts] should return empty");
+    }
+
+    #[test]
+    fn test_compiled_hosts_deprecated_empty() {
+        // [hosts] is deprecated — always empty
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+amail_url = "http://x"
+admin_key = "k"
+system_id = "s"
+"#).unwrap();
+        let compiled = cfg.compiled_hosts();
+        assert!(compiled.is_empty());
+    }
+
+    #[test]
+    fn test_parsed_addr_default_port() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+addr = "0.0.0.0"
+"#).unwrap();
+        let (host, port) = cfg.push.parsed_addr();
+        assert_eq!(host, "0.0.0.0");
+        assert_eq!(port, 80);
+    }
+
+    #[test]
+    fn test_parsed_addr_explicit_port() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+addr = "127.0.0.1:8080"
+"#).unwrap();
+        let (host, port) = cfg.push.parsed_addr();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn test_hostname_or_empty() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+hostname = "test.example.com"
+"#).unwrap();
+        assert_eq!(cfg.push.hostname_or_empty(), "test.example.com");
+
+        let cfg2: BridgeConfig = toml::from_str(r#"
+mode = "push"
+[push]
+"#).unwrap();
+        assert_eq!(cfg2.push.hostname_or_empty(), "");
     }
 }

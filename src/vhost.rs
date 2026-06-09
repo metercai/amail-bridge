@@ -81,11 +81,17 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Opt
             // Manually serve files instead of using ServeDir::oneshot,
             // which has issues when called from a middleware context.
             let path = req.uri().path();
+            let clean = path.trim_start_matches('/');
+            // Security: block path traversal before joining
+            if clean.contains("..") {
+                return Response::builder()
+                    .status(403)
+                    .body(Body::from("forbidden"))
+                    .unwrap();
+            }
             let file_path = if path == "/" || path.is_empty() {
                 root_dir.join("index.html")
             } else {
-                // Sanitize path to prevent directory traversal
-                let clean = path.trim_start_matches('/');
                 root_dir.join(clean)
             };
             // Security: ensure resolved path is within root_dir
@@ -244,3 +250,116 @@ pub fn find_vhost<'a>(
     None
 }
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_routes() -> Vec<(String, VhostRoute)> {
+        vec![
+            ("example.com".into(), VhostRoute::Redirect("https://example.com".into())),
+            ("www.test.org".into(), VhostRoute::Static("/tmp".into())),
+        ]
+    }
+
+    #[test]
+    fn test_find_vhost_exact() {
+        let routes = make_routes();
+        let req = Request::builder()
+            .header("host", "example.com")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        assert!(find_vhost(&req, &routes).is_some());
+    }
+
+    #[test]
+    fn test_find_vhost_with_port() {
+        let routes = make_routes();
+        let req = Request::builder()
+            .header("host", "example.com:8080")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        assert!(find_vhost(&req, &routes).is_some());
+    }
+
+    #[test]
+    fn test_find_vhost_case_insensitive() {
+        let routes = make_routes();
+        let req = Request::builder()
+            .header("host", "EXAMPLE.COM")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        assert!(find_vhost(&req, &routes).is_some());
+    }
+
+    #[test]
+    fn test_find_vhost_no_match() {
+        let routes = make_routes();
+        let req = Request::builder()
+            .header("host", "notfound.net")
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        assert!(find_vhost(&req, &routes).is_none());
+    }
+
+    #[test]
+    fn test_find_vhost_no_header_uri_authority() {
+        let routes = make_routes();
+        // No Host header, use URI authority
+        let req = Request::builder()
+            .uri("http://example.com/path")
+            .body(Body::empty())
+            .unwrap();
+        assert!(find_vhost(&req, &routes).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_static_path_traversal_blocked() {
+        // Create temporary test file
+        let tmp = std::env::temp_dir().join("amail_bridge_traversal_test");
+        let _ = std::fs::create_dir_all(&tmp);
+        let sub = tmp.join("sub");
+        let _ = std::fs::create_dir_all(&sub);
+        std::fs::write(sub.join("secret.txt"), "secret").unwrap();
+
+        let route = VhostRoute::Static(tmp.clone());
+        let req = Request::builder()
+            .uri("/sub/secret.txt")
+            .body(Body::empty())
+            .unwrap();
+        let resp = handle_vhost(&route, req, None, 20).await;
+        // Should succeed (path inside root_dir)
+        assert_eq!(resp.status(), 200);
+
+        // Traversal attempt: ../ outside root
+        let req2 = Request::builder()
+            .uri("/../etc/passwd")
+            .body(Body::empty())
+            .unwrap();
+        let resp2 = handle_vhost(&route, req2, None, 20).await;
+        // Should be blocked
+        assert_eq!(resp2.status(), 403);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_redirect_returns_permanent() {
+        let route = VhostRoute::Redirect("https://example.com".into());
+        let req = Request::builder()
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+        let resp = handle_vhost(&route, req, None, 20).await;
+        // axum::Redirect::permanent uses 308 (RFC 7538)
+        assert_eq!(resp.status(), 308);
+        let location = resp.headers().get("location")
+            .and_then(|v| v.to_str().ok());
+        assert_eq!(location, Some("https://example.com"));
+    }
+}

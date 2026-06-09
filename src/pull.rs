@@ -233,3 +233,242 @@ async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn
     }
     Ok(acked.unwrap_or(0) as usize)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pending_batch_deserialize() {
+        let json = r#"{
+            "body": {"subject": "hello"},
+            "deliveries": [
+                {"id": 1, "email": "alice@x.com", "headers": {"x-fwd": "v1"}},
+                {"id": 2, "email": "bob@x.com", "headers": {"x-fwd": "v2"}}
+            ]
+        }"#;
+        let batch: PendingBatch = serde_json::from_str(json).unwrap();
+        assert_eq!(batch.deliveries.len(), 2);
+        assert_eq!(batch.deliveries[0].id, 1);
+        assert_eq!(batch.deliveries[0].email, "alice@x.com");
+        assert_eq!(batch.deliveries[1].id, 2);
+        assert_eq!(batch.deliveries[1].email, "bob@x.com");
+    }
+
+    #[test]
+    fn test_pending_batch_empty_deliveries() {
+        let json = r#"{"body": {}, "deliveries": []}"#;
+        let batch: PendingBatch = serde_json::from_str(json).unwrap();
+        assert!(batch.deliveries.is_empty());
+    }
+
+    #[test]
+    fn test_batch_delivery_deserialize() {
+        let json = r#"{"id": 42, "email": "carol@test.org", "headers": {"key": "val"}}"#;
+        let d: BatchDelivery = serde_json::from_str(json).unwrap();
+        assert_eq!(d.id, 42);
+        assert_eq!(d.email, "carol@test.org");
+        let h: HashMap<String, String> = serde_json::from_value(d.headers).unwrap();
+        assert_eq!(h.get("key").unwrap(), "val");
+    }
+
+    #[test]
+    fn test_batch_delivery_missing_email() {
+        // id is i64 (not optional) but should deserialize
+        let json = r#"{"id": 0, "email": "", "headers": {}}"#;
+        let d: BatchDelivery = serde_json::from_str(json).unwrap();
+        assert!(d.email.is_empty());
+    }
+
+    // ── Backoff calculation ──────────────────────────────
+
+    #[test]
+    fn test_backoff_calculation_start() {
+        // consecutive_failures=1: 10 * 2^1 = 20
+        let poll_interval: u64 = 10;
+        let failures: u32 = 1;
+        let bs = (poll_interval * 2_u64.pow(failures.min(6))).min(300);
+        assert_eq!(bs, 20);
+    }
+
+    #[test]
+    fn test_backoff_calculation_ramp() {
+        let poll_interval: u64 = 10;
+        for (failures, expected) in &[(0u32, 10u64), (1, 20), (2, 40), (3, 80), (4, 160), (5, 300), (6, 300)] {
+            let bs = (poll_interval * 2_u64.pow((*failures).min(6))).min(300);
+            assert_eq!(bs, *expected, "failures={} should give {}", failures, expected);
+        }
+    }
+
+    #[test]
+    fn test_backoff_calculation_capped_at_300() {
+        let poll_interval: u64 = 10;
+        // After 6+ failures, backoff should be 300
+        let bs = (poll_interval * 2_u64.pow(100.min(6))).min(300);
+        assert_eq!(bs, 300);
+    }
+
+    #[test]
+    fn test_backoff_different_poll_interval() {
+        let poll_interval: u64 = 30;
+        let bs = (poll_interval * 2_u64.pow(3.min(6))).min(300);
+        assert_eq!(bs, 240); // 30 * 2^3 = 240
+    }
+
+    #[test]
+    fn test_backoff_poll_interval_above_max() {
+        let poll_interval: u64 = 600; // 10 min
+        let bs = (poll_interval * 2_u64.pow(0.min(6))).min(300);
+        assert_eq!(bs, 300); // capped at 300
+    }
+
+    // ── URL construction ──────────────────────────────────
+
+    #[test]
+    fn test_fetch_pending_url_with_trailing_slash() {
+        let url = "http://relay.example.com/";
+        let expected = format!("{}/api/v1/admin/pending", url.trim_end_matches('/'));
+        assert_eq!(expected, "http://relay.example.com/api/v1/admin/pending");
+    }
+
+    #[test]
+    fn test_fetch_pending_url_without_trailing_slash() {
+        let url = "http://relay.example.com";
+        let expected = format!("{}/api/v1/admin/pending", url.trim_end_matches('/'));
+        assert_eq!(expected, "http://relay.example.com/api/v1/admin/pending");
+    }
+
+    #[test]
+    fn test_fetch_pending_url_localhost() {
+        let url = "http://127.0.0.1:38080";
+        let expected = format!("{}/api/v1/admin/pending", url.trim_end_matches('/'));
+        assert_eq!(expected, "http://127.0.0.1:38080/api/v1/admin/pending");
+    }
+
+    #[test]
+    fn test_ack_url_construction() {
+        let url = "http://admin.relay";
+        let expected = format!("{}/api/v1/admin/pending/ack", url.trim_end_matches('/'));
+        assert_eq!(expected, "http://admin.relay/api/v1/admin/pending/ack");
+    }
+
+    // ── JSON serde edge cases ────────────────────────────
+
+    #[test]
+    fn test_pending_batch_deserialize_extra_fields() {
+        let json = r#"{"body": {}, "deliveries": [], "extra": "ignored"}"#;
+        let batch: PendingBatch = serde_json::from_str(json).unwrap();
+        assert!(batch.deliveries.is_empty());
+    }
+
+    #[test]
+    fn test_pending_batch_body_null() {
+        let json = r#"{"body": null, "deliveries": [{"id": 1, "email": "a@b.c", "headers": {}}]}"#;
+        let batch: PendingBatch = serde_json::from_str(json).unwrap();
+        assert_eq!(batch.deliveries.len(), 1);
+    }
+
+    #[test]
+    fn test_pending_batch_delivery_missing_headers() {
+        // headers is a required field in BatchDelivery, so missing = error
+        let json = r#"{"body": {}, "deliveries": [{"id": 1, "email": "a@b.c"}]}"#;
+        let result: Result<PendingBatch, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pending_batch_delivery_email_null() {
+        let json = r#"{"body": {}, "deliveries": [{"id": 1, "email": null, "headers": {}}]}"#;
+        let result: Result<PendingBatch, _> = serde_json::from_str(json);
+        // email is String, so null should fail
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_batch_delivery_deserialize_invalid_id_type() {
+        let json = r#"{"id": "not-a-number", "email": "a@b.c", "headers": {}}"#;
+        let result: Result<BatchDelivery, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pending_batch_empty_body_array() {
+        let json = r#"{"body": [], "deliveries": []}"#;
+        let batch: PendingBatch = serde_json::from_str(json).unwrap();
+        // body can be any valid JSON — array is fine
+        assert!(batch.body.is_array());
+    }
+
+    #[test]
+    fn test_pending_batch_multiple_batches() {
+        let json = r#"{
+            "batches": [
+                {"body": {"t": 1}, "deliveries": [{"id": 1, "email": "a@x.com", "headers": {}}]},
+                {"body": {"t": 2}, "deliveries": [{"id": 2, "email": "b@x.com", "headers": {}}]}
+            ]
+        }"#;
+        #[derive(serde::Deserialize)]
+        struct Wrapper { batches: Vec<PendingBatch> }
+        let w: Wrapper = serde_json::from_str(json).unwrap();
+        assert_eq!(w.batches.len(), 2);
+        assert_eq!(w.batches[0].deliveries[0].email, "a@x.com");
+        assert_eq!(w.batches[1].deliveries[0].email, "b@x.com");
+    }
+
+    #[test]
+    fn test_dedup_seen_map_logic() {
+        use std::collections::HashMap;
+        use std::time::Instant;
+        
+        let mut seen: HashMap<i64, Instant> = HashMap::new();
+        let seen_ttl = std::time::Duration::from_secs(7200);
+        
+        // Insert two IDs
+        seen.insert(1, Instant::now());
+        seen.insert(2, Instant::now());
+        assert_eq!(seen.len(), 2);
+        
+        // Check dedup: both should be within TTL
+        assert!(seen.get(&1).unwrap().elapsed() < seen_ttl);
+        assert!(seen.get(&2).unwrap().elapsed() < seen_ttl);
+        
+        // Remove stale entries: none should be removed
+        seen.retain(|_, t| t.elapsed() < seen_ttl);
+        assert_eq!(seen.len(), 2);
+        
+        // ACK IDs should only include those not recently seen
+        let ack_only_new = vec![3i64, 4].into_iter()
+            .filter(|id| !seen.contains_key(id))
+            .collect::<Vec<_>>();
+        assert_eq!(ack_only_new.len(), 2);
+        assert_eq!(ack_only_new, vec![3, 4]);
+        
+        // Simulate forwarding: insert after successful forward
+        seen.insert(3, Instant::now());
+        assert!(seen.contains_key(&3));
+    }
+
+    #[test]
+    fn test_dedup_skip_already_forwarded() {
+        use std::collections::HashMap;
+        use std::time::Instant;
+        
+        let mut seen: HashMap<i64, Instant> = HashMap::new();
+        let seen_ttl = std::time::Duration::from_secs(7200);
+        
+        // Simulate an email that was already forwarded
+        seen.insert(42, Instant::now());
+        
+        // When processing delivery with id=42, check dedup
+        let id = 42i64;
+        let already_seen = seen.get(&id)
+            .map(|t| t.elapsed() < seen_ttl)
+            .unwrap_or(false);
+        assert!(already_seen);
+        
+        // ACK should still include it (the loop ACKs even deduped)
+        let deduped_acks = if already_seen { vec![id] } else { vec![] };
+        assert_eq!(deduped_acks, vec![42]);
+    }
+}

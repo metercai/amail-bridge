@@ -238,7 +238,6 @@ async fn async_main(
     config.validate();
     let router = Arc::new(router::ProfileRouter::new(
         &config.default_profile_dir,
-        config.compiled_hosts(),
     ));
 
     if let Err(e) = router::start_watcher(router.clone()) {
@@ -315,3 +314,71 @@ fn init_tracing(cfg: &crate::config::LoggingConfig, daemon: bool, daemon_log: &s
     builder.with_writer(non_blocking).init();
     std::mem::forget(_guard);
 }
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_args_default() {
+        let cli = parse_args_from(&["amail-bridge".into()]);
+        assert!(!cli.daemon);
+        assert!(cli.pid_file.is_none());
+        assert!(cli.log_file.is_none());
+        assert!(cli.config_path.is_none());
+    }
+
+    #[test]
+    fn test_parse_args_daemon() {
+        let cli = parse_args_from(&["amail-bridge".into(), "--daemon".into()]);
+        assert!(cli.daemon);
+    }
+
+    #[test]
+    fn test_parse_args_config() {
+        let cli = parse_args_from(&[
+            "amail-bridge".into(),
+            "-c".into(),
+            "/tmp/test.toml".into(),
+        ]);
+        assert_eq!(cli.config_path, Some(PathBuf::from("/tmp/test.toml")));
+    }
+
+    #[test]
+    fn test_parse_args_pid_file() {
+        let cli = parse_args_from(&[
+            "amail-bridge".into(),
+            "--pid-file".into(),
+            "/var/run/bridge.pid".into(),
+        ]);
+        assert_eq!(cli.pid_file, Some(PathBuf::from("/var/run/bridge.pid")));
+    }
+
+    #[test]
+    fn test_parse_args_log_file() {
+        let cli = parse_args_from(&[
+            "amail-bridge".into(),
+            "--log-file".into(),
+            "/var/log/bridge.log".into(),
+        ]);
+        assert_eq!(cli.log_file, Some(PathBuf::from("/var/log/bridge.log")));
+    }
+}
+
+/// Parse CLI arguments from a custom args slice (testable).
+pub fn parse_args_from(args: &[String]) -> CliArgs {
+    let mut cli = CliArgs::default();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--daemon" | "-d" => cli.daemon = true,
+            "--pid-file" => { i += 1; cli.pid_file = Some(PathBuf::from(&args[i])); }
+            "--log-file" => { i += 1; cli.log_file = Some(PathBuf::from(&args[i])); }
+            "--config" | "-c" => { i += 1; cli.config_path = Some(PathBuf::from(&args[i])); }
+            _ => {}
+        }
+        i += 1;
+    }
+    cli
+}
+

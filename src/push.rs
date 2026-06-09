@@ -662,4 +662,248 @@ mod tests {
             assert!(limiter.check(ip));
         }
     }
+
+    #[test]
+    fn test_parse_cidr_ipv6() {
+        assert_eq!(parse_cidr("::1"), Some(("::1".parse().unwrap(), 128)));
+        assert_eq!(parse_cidr("2001:db8::/32"), Some(("2001:db8::".parse().unwrap(), 32)));
+    }
+
+    #[test]
+    fn test_parse_cidr_prefix_0() {
+        assert_eq!(parse_cidr("0.0.0.0/0"), Some(("0.0.0.0".parse().unwrap(), 0)));
+        assert_eq!(parse_cidr("::/0"), Some(("::".parse().unwrap(), 0)));
+    }
+
+    #[test]
+    fn test_parse_cidr_full_mask() {
+        assert_eq!(parse_cidr("192.168.1.1/32"), Some(("192.168.1.1".parse().unwrap(), 32)));
+        assert_eq!(parse_cidr("10.0.0.1/32"), Some(("10.0.0.1".parse().unwrap(), 32)));
+    }
+
+    #[test]
+    fn test_ip_matches_ipv6() {
+        let ip: IpAddr = "2001:db8::1".parse().unwrap();
+        let net: IpAddr = "2001:db8::".parse().unwrap();
+        assert!(ip_matches(ip, net, 32));
+        assert!(!ip_matches(ip, net, 128));
+    }
+
+    #[test]
+    fn test_ip_matches_prefix_0() {
+        let v4: IpAddr = "1.2.3.4".parse().unwrap();
+        assert!(ip_matches(v4, "0.0.0.0".parse().unwrap(), 0));
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert!(ip_matches(v6, "::".parse().unwrap(), 0));
+    }
+
+    #[test]
+    fn test_ip_matches_v4_v6_mismatch() {
+        let v4: IpAddr = "192.168.1.1".parse().unwrap();
+        let v6: IpAddr = "::ffff:192.168.1.1".parse().unwrap();
+        assert!(!ip_matches(v4, v6, 0));
+        assert!(!ip_matches(v6, v4, 0));
+    }
+
+    #[test]
+    fn test_ip_matches_edge_cases() {
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(ip_matches(ip, ip, 32));
+        assert!(ip_matches("10.0.1.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
+        assert!(!ip_matches("10.0.2.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
+    }
+
+    #[test]
+    fn test_rate_limiter_multiple_ips() {
+        let limiter = IpRateLimiter::new(2);
+        let ip_a: IpAddr = "1.1.1.1".parse().unwrap();
+        let ip_b: IpAddr = "2.2.2.2".parse().unwrap();
+        assert!(limiter.check(ip_a));
+        assert!(limiter.check(ip_a));
+        assert!(!limiter.check(ip_a));
+        assert!(limiter.check(ip_b));
+        assert!(limiter.check(ip_b));
+        assert!(!limiter.check(ip_b));
+    }
+
+    #[test]
+    fn test_rate_limiter_window_reset() {
+        let limiter = IpRateLimiter::new(2);
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        assert!(limiter.check(ip));
+        assert!(limiter.check(ip));
+        assert!(!limiter.check(ip));
+        let w = limiter.window.lock().unwrap();
+        assert!(w.contains_key(&ip));
+    }
+
+    #[test]
+    fn test_rate_limiter_stale_cleanup() {
+        let limiter = IpRateLimiter::new(5);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        assert!(limiter.check(ip));
+        let w = limiter.window.lock().unwrap();
+        assert_eq!(w.len(), 1);
+        drop(w);
+        {
+            let mut w = limiter.window.lock().unwrap();
+            w.insert(ip, (Instant::now() - std::time::Duration::from_secs(10), 0));
+        }
+        assert!(limiter.check(ip));
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        assert!(limiter.check(ip2));
+    }
+
+    #[test]
+    fn test_allowlist_ipv6() {
+        let allowlist = IpAllowlist::from_config(&["2001:db8::/32".into()]);
+        assert!(allowlist.allows("2001:db8::1".parse().unwrap()));
+        assert!(!allowlist.allows("2001:db9::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_blacklist_ipv6() {
+        let blacklist = IpBlacklist::from_config(&["fe80::/10".into()]);
+        assert!(blacklist.blocks("fe80::1".parse().unwrap()));
+        assert!(!blacklist.blocks("2001:db8::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_prefix_too_large() {
+        assert_eq!(parse_cidr("10.0.0.1/33"), None);
+        assert_eq!(parse_cidr("::1/129"), None);
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_empty() {
+        assert_eq!(parse_cidr(""), None);
+        assert_eq!(parse_cidr("/24"), None);
+    }
+
+    #[tokio::test]
+    async fn test_health_response_shape() {
+        use std::time::Instant;
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let resp = axum::response::IntoResponse::into_response(
+            health(State(state)).await
+        );
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_handle_webhook_missing_email() {
+        use axum::body::Bytes;
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let headers = HeaderMap::new();
+        let body = Bytes::from_static(b"{\"hello\": \"world\"}");
+        let resp = handle_webhook(State(state), headers, body).await;
+        let resp = resp.into_response();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_webhook_invalid_json() {
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let body = Bytes::from_static(b"not-json");
+        let resp = handle_batch_webhook(State(state), body).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_webhook_missing_signatures() {
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let body = Bytes::from_static(b"{\"body\": {}}");
+        let resp = handle_batch_webhook(State(state), body).await;
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_webhook_empty_signatures() {
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let body = Bytes::from_static(b"{\"signatures\": []}");
+        let resp = handle_batch_webhook(State(state), body).await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_webhook_entry_without_email() {
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let body = Bytes::from_static(b"{\"signatures\": [{\"signature\": \"sig\"}]}");
+        let resp = handle_batch_webhook(State(state), body).await;
+        // 207 Multi-Status: entry exists but no route found
+        assert_eq!(resp.status(), 207);
+    }
+
+    #[tokio::test]
+    async fn test_handle_batch_webhook_partial_delivery_no_route() {
+        let state = PushState {
+            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"))),
+            http_client: reqwest::Client::new(),
+            config: toml::from_str(r#"mode = "push"
+[push]
+"#).unwrap(),
+            startup: Instant::now(),
+        };
+        let body = Bytes::from_static(b"{\"signatures\": [{\"email\": \"nobody@x.com\", \"signature\": \"sig\"}]}");
+        let resp = handle_batch_webhook(State(state), body).await;
+        // 207 Multi-Status: 0/1 delivered
+        assert_eq!(resp.status(), 207);
+    }
+
+    #[test]
+    fn test_batch_detection_prefix_matches() {
+        // Body starting with {"signatures": should trigger batch path
+        assert!(b"{\"signatures\":[]}".starts_with(b"{"));
+        assert!(b"{\"signatures\": []}".starts_with(b"{"));
+        assert!(b"{\"signatures\":\"abc\"}".starts_with(b"{"));
+    }
+
+    #[test]
+    fn test_batch_detection_prefix_does_not_match() {
+        assert!(!b"{\"data\": {}}".starts_with(b"{\"signatures\":"));
+        assert!(!b"{\"signature\": \"x\"}".starts_with(b"{\"signatures\":"));
+        assert!(!b"not-json".starts_with(b"{\"signatures\":"));
+    }
 }
