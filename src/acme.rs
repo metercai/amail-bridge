@@ -191,11 +191,28 @@ fn set_key_permissions(path: &Path) -> Result<(), Box<dyn std::error::Error + Se
         perms.set_mode(0o600);
         std::fs::set_permissions(path, perms)?;
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // On Windows/macOS, this is a no-op — use the platform's native
-        // access control if tighter permissions are required.
-        let _ = path;
+        // On Windows, restrict the private key to the current user only.
+        // icacls is built into every supported Windows version.
+        let path_str = path.to_string_lossy();
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrator".into());
+        let status = std::process::Command::new("icacls")
+            .args([
+                path_str.as_ref(),
+                "/inheritance:r",           // remove inherited ACEs
+                "/grant:r",                 // replace all explicit ACEs
+                &format!("{}:F", user),     // full control to current user only
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+        if !status.success() {
+            tracing::warn!(
+                path = %path_str,
+                "Failed to lock down private key ACL — cert may be readable by other users"
+            );
+        }
     }
     Ok(())
 }

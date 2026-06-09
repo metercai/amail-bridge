@@ -128,10 +128,47 @@ pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
 
 /// Daemon mode is not available on non-Unix platforms.
 /// Use the platform's native service manager instead (launchd, sc.exe, etc.).
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 pub fn daemonize(_pid_file: &PathBuf, _log_file: &PathBuf) {
     eprintln!("--daemon is not supported on this platform. Use the native service manager.");
     process::exit(1);
+}
+
+/// Windows daemonize: spawn a detached child process (no console window),
+/// then exit the parent.  The child detects it is already detached and
+/// continues normally — equivalent to Unix double-fork semantics.
+#[cfg(windows)]
+pub fn daemonize(pid_file: &PathBuf, log_file: &PathBuf) {
+    extern "system" {
+        fn GetConsoleWindow() -> isize;
+    }
+
+    // Guard: if already detached, we are the child — proceed normally
+    if unsafe { GetConsoleWindow() } == 0 {
+        let _ = pid_file;
+        let _ = log_file;
+        return;
+    }
+
+    // Parent: respawn without a console window
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+    let exe = std::env::current_exe().expect("Cannot get executable path");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Spawn detached child with all CLI args intact (including --daemon)
+    std::process::Command::new(exe)
+        .args(&args)
+        .creation_flags(DETACHED_PROCESS)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("Failed to spawn detached background process");
+
+    // Parent exits — child takes over
+    process::exit(0);
 }
 
 // ── entry point ────────────────────────────────────────────────────────
