@@ -141,7 +141,7 @@ EOF
 cat > amail_bridge.toml << 'EOF'
 mode = "pull"
 [pull]
-relay_url = "http://gateway.example.com:38080"
+amail_url = "http://gateway.example.com:38080"
 admin_key = "sk-xxxxxxxx"
 system_id = "admin"
 EOF
@@ -184,7 +184,7 @@ body_limit_mb = 20                    # max request body in MB (default: 20)
 mode = "pull"
 
 [pull]
-relay_url = "http://gateway.example.com:38080"
+amail_url = "http://gateway.example.com:38080"
 admin_key = "sk-xxxxxxxx"            # system admin API key from gateway
 system_id = "admin"                  # system ID for pending query (default: "admin")
 poll_interval_sec = 10               # poll interval in seconds (default: 10)
@@ -212,7 +212,7 @@ file = "/var/log/amail-bridge.log"   # log file, stdout if unset (default: none)
 |---|---|
 | `AMAIL_BRIDGE_MODE` | `mode` |
 | `AMAIL_BRIDGE_HOSTNAME` | `push.hostname` |
-| `AMAIL_BRIDGE_RELAY_URL` | `pull.relay_url` |
+| `AMAIL_BRIDGE_RELAY_URL` | `pull.amail_url` |
 | `AMAIL_BRIDGE_ADMIN_KEY` | `pull.admin_key` |
 | `AMAIL_BRIDGE_SYSTEM_ID` | `pull.system_id` |
 | `AMAIL_BRIDGE_POLL_SECS` | `pull.poll_interval_sec` |

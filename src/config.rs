@@ -171,7 +171,7 @@ pub struct VhostSiteConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PullConfig {
     #[serde(default)]
-    pub relay_url: String,
+    pub amail_url: String,
     #[serde(default)]
     pub admin_key: String,
     #[serde(default = "default_poll_interval")]
@@ -207,7 +207,7 @@ fn default_log_level() -> String { "info".into() }
 impl Default for PullConfig {
     fn default() -> Self {
         Self {
-            relay_url: String::new(),
+            amail_url: String::new(),
             admin_key: String::new(),
             poll_interval_sec: 10,
             system_id: String::new(),
@@ -231,7 +231,7 @@ impl BridgeConfig {
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_HOSTNAME") {
             if !v.is_empty() { cfg.push.hostname = Some(v); }
         }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_RELAY_URL") { cfg.pull.relay_url = v; }
+        if let Ok(v) = std::env::var("AMAIL_BRIDGE_RELAY_URL") { cfg.pull.amail_url = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_ADMIN_KEY") { cfg.pull.admin_key = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_POLL_SECS") {
@@ -272,8 +272,8 @@ impl BridgeConfig {
     /// Validate configuration and emit warnings for insecure settings.
     pub fn validate(&self) {
         if self.mode == "pull" {
-            if self.pull.relay_url.is_empty() {
-                tracing::warn!("pull.relay_url is empty — pull loop will fail");
+            if self.pull.amail_url.is_empty() {
+                tracing::warn!("pull.amail_url is empty — pull loop will fail");
             }
             if self.pull.admin_key.is_empty() {
                 tracing::warn!("pull.admin_key is empty — authentication will fail");
@@ -314,7 +314,7 @@ mod tests {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "pull"
 [pull]
-relay_url = "http://x"
+amail_url = "http://x"
 admin_key = "k"
 system_id = "s"
 "#).unwrap();

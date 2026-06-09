@@ -40,7 +40,7 @@ pub async fn start_pull_loop(
     const MAX_BACKOFF: u64 = 300; // 5 min
 
     tracing::info!(
-        relay_url = %config.pull.relay_url,
+        amail_url = %config.pull.amail_url,
         system_id = %config.pull.system_id,
         poll_interval_sec = config.pull.poll_interval_sec,
         "Starting pull loop"
@@ -184,7 +184,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
     }
     let url = format!(
         "{}/api/v1/admin/pending",
-        state.config.pull.relay_url.trim_end_matches('/'),
+        state.config.pull.amail_url.trim_end_matches('/'),
     );
     let body = serde_json::json!({
         "limit": 50,
@@ -214,7 +214,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
 async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn std::error::Error>> {
     let url = format!(
         "{}/api/v1/admin/pending/ack",
-        state.config.pull.relay_url.trim_end_matches('/'),
+        state.config.pull.amail_url.trim_end_matches('/'),
     );
 
     let resp = state

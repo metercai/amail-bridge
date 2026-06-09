@@ -16,7 +16,7 @@ mode = "pull"  # "push" or "pull" (default: "pull")
 
 # ── Pull mode (bridge polls relay outbound) ───────────────────────
 [pull]
-relay_url = "http://192.168.1.1:38080"  # Relay HTTP API URL
+amail_url = "http://192.168.1.1:38080"  # Relay HTTP API URL
 admin_key = "sk-..."                    # System admin API key from relay
 system_id = "admin"                     # System ID for pending-query (default: "admin")
 poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
