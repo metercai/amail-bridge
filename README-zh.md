@@ -26,8 +26,8 @@ HTTP 长轮询**连接 —— bridge 主动从 gateway 拉取投递并扇出到�
 ### 安全的透明透传
 
 bridge 不持有任何 HMAC 密钥。gateway 用各 agent 的 webhook secret 签名 → bridge
-原样转发 headers + body → agent 验签。安全边界不变。push 模式支持 IP 白名单
-+ 黑名单 + 每 IP 限速；pull 模式基于 ACK 消费 + 2 小时去重缓存，零消息丢失、
+原样转发 headers + body → agent 验签。安全边界不变。push 模式支持 IP 白名单 + 
+黑名单 + 每 IP 限速；pull 模式基于 ACK 消费 + 2 小时去重缓存，零消息丢失、
 零重复投递。
 
 ### 轻量纯 Rust，零 OpenSSL
