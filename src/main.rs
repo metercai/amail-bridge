@@ -207,6 +207,11 @@ async fn async_main(
     pid_file: PathBuf,
     log_file: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Install ring as the default rustls crypto provider (must be done once at startup)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install ring crypto provider");
+
     // Init tracing — log to file if daemonized, stderr otherwise
     if cli.daemon {
         let log_writer = std::fs::OpenOptions::new()

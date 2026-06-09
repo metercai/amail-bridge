@@ -123,12 +123,13 @@ impl IpRateLimiter {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis() as u64; // millisecond precision — avoids second-boundary flakiness
         let mut w = self.window.lock().unwrap();
         // Cleanup stale entries (older than 2 seconds)
-        w.retain(|_, (ts, _)| now - *ts <= 2);
+        w.retain(|_, (ts, _)| now.saturating_sub(*ts) <= 2000);
         let entry = w.entry(ip).or_insert((now, 0));
-        if entry.0 != now {
+        if now.saturating_sub(entry.0) > 1000 {
+            // New second window — reset count
             entry.0 = now;
             entry.1 = 1;
             return true;

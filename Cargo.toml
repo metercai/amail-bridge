@@ -6,11 +6,11 @@ description = "Transparent bridge between amail relay and Hermes gateway"
 
 [dependencies]
 axum = "0.7"
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 hyper = "1"
 
-rustls = "0.23"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 rustls-pemfile = "2"
 instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls"] }
 
