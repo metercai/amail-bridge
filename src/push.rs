@@ -164,7 +164,7 @@ pub fn build_push_router(state: PushState) -> Router {
     let mut router = Router::new()
         .route("/webhooks/{*name}", post(handle_webhook))
         .route("/health", get(health))
-        .layer(DefaultBodyLimit::max((state.config.push.body_limit_mb as usize) * 1024 * 1024)) // 10 MB
+        .layer(DefaultBodyLimit::max((state.config.push.body_limit_mb as usize) * 1024 * 1024))
         .with_state(state.clone());
 
     // IP blacklist (checked first, before allowlist)
@@ -416,7 +416,8 @@ pub async fn start_push_server(
                 }
             }
         } else {
-            unreachable!() // has_tls() ensures hostname is set
+            tracing::error!("has_tls() returned true but hostname is None — falling back to HTTP");
+            return start_push_http(shutdown, app, addr).await;
         };
 
         let tls_config = build_tls_config_from_paths(&cert_path, &key_path)?;

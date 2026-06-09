@@ -92,8 +92,7 @@ pub async fn start_pull_loop(
                     let headers: HashMap<String, String> = match serde_json::from_value(d.headers.clone()) {
                         Ok(h) => h,
                         Err(e) => {
-                            tracing::warn!(id = d.id, error = %e, "Invalid headers JSON");
-                            ack_ids.push(d.id);
+                            tracing::warn!(id = d.id, error = %e, "Invalid headers JSON — skipping, will retry next poll");
                             continue;
                         }
                     };

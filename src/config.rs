@@ -228,7 +228,9 @@ impl BridgeConfig {
 
         // Env overrides
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_MODE") { cfg.mode = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_HOSTNAME") { cfg.push.hostname = Some(v); }
+        if let Ok(v) = std::env::var("AMAIL_BRIDGE_HOSTNAME") {
+            if !v.is_empty() { cfg.push.hostname = Some(v); }
+        }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_RELAY_URL") { cfg.pull.relay_url = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_ADMIN_KEY") { cfg.pull.admin_key = v; }
         if let Ok(v) = std::env::var("AMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
