@@ -7,7 +7,7 @@ description = "Transparent bridge between amail relay and Hermes gateway"
 [dependencies]
 axum = "0.7"
 axum-server = "0.7"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 hyper = "1"
 
 rustls = { version = "0.23", optional = true }

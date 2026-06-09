@@ -18,31 +18,27 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact: amail-bridge-linux-amd64
+            platform: linux-amd64
             ext: ""
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            artifact: amail-bridge-linux-arm64
+            platform: linux-arm64
             ext: ""
           - target: x86_64-apple-darwin
             os: macos-latest
-            artifact: amail-bridge-macos-amd64
+            platform: macos-amd64
             ext: ""
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact: amail-bridge-macos-arm64
+            platform: macos-arm64
             ext: ""
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact: amail-bridge-windows-amd64
+            platform: windows-amd64
             ext: ".exe"
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install deps (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,14 +51,15 @@ jobs:
       - name: Rename binary
         shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/amail-bridge${{ matrix.ext }} \
-             ${{ matrix.artifact }}-${{ github.ref_name }}${{ matrix.ext }}
+          BIN="amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}"
+          cp target/${{ matrix.target }}/release/amail-bridge${{ matrix.ext }} "$BIN"
+          echo "BIN=$BIN" >> $GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}-${{ github.ref_name }}
-          path: ${{ matrix.artifact }}-${{ github.ref_name }}${{ matrix.ext }}
+          name: amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}
+          path: amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -73,6 +70,6 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: amail-bridge-*/*
+          files: amail-bridge-${{ github.ref_name }}-*/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
