@@ -1,5 +1,10 @@
 # amail-bridge
 
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
+![License](https://img.shields.io/badge/License-GPL--3.0-blue)
+![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)
+![Security](https://img.shields.io/badge/Security-OpenSSL%200-brightgreen)
+![TLS](https://img.shields.io/badge/TLS-rustls-purple)
 > Zero ports, email inbound. One port, instant forwarding to all agents.
 
 A high-performance transparent bridge between [amail-gateway](https://github.com/metercai/amail-gateway)

@@ -1,5 +1,10 @@
 # amail-bridge
 
+![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
+![License](https://img.shields.io/badge/License-GPL--3.0-blue)
+![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)
+![Security](https://img.shields.io/badge/Security-OpenSSL%200-brightgreen)
+![TLS](https://img.shields.io/badge/TLS-rustls-purple)
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
 
 连接 [amail-gateway](https://github.com/metercai/amail-gateway) 和
