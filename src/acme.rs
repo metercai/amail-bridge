@@ -8,7 +8,9 @@
 //! 3. If valid → reuse (skip ACME request, avoid LE rate limits on restart).
 //! 4. If absent or expired → request via HTTP-01 challenge (port 80).
 //! 5. Save cert + private key (chmod 0o600) to the cache directory.
-//! 6. Spawn a background renew thread (checks every 12h, stop flag for clean shutdown).
+//! 6. Spawn a background renew task (checks every 12h, stop flag for clean shutdown).
+//!
+//! Uses `instant-acme` — pure Rust (ring crypto), zero OpenSSL dependency.
 //!
 //! On any failure the caller should fall back to plain HTTP with a warning.
 
@@ -19,7 +21,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acme_micro::{create_p384_key, Directory, DirectoryUrl};
+use instant_acme::{
+    Account, AccountCredentials, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
+    OrderStatus, RetryPolicy,
+};
 
 /// Result of a successful ACME certificate acquisition (or cache hit).
 pub struct AcmeCertPaths {
@@ -27,10 +32,10 @@ pub struct AcmeCertPaths {
     pub key: PathBuf,
 }
 
-/// Stop token for the background renew thread.
+/// Stop token for the background renew task.
 ///
-/// Set to `true` before joining the thread on graceful shutdown.
-/// The thread checks this flag every 10 seconds and exits cleanly.
+/// Set to `true` on graceful shutdown.  The task checks this flag every
+/// 10 seconds and exits cleanly.
 pub type AcmeStopToken = Arc<AtomicBool>;
 
 // ── Public helpers ────────────────────────────────────────────────
@@ -52,9 +57,9 @@ pub fn extract_domain(public_url: &str) -> Option<String> {
 
 /// Get a TLS certificate for `domain`, reusing a cached one if still valid.
 ///
-/// Returns the cert/key paths plus a stop token for the renew thread.
+/// Returns the cert/key paths plus a stop token for the renew task.
 /// The caller should store the token and set it to `true` on shutdown.
-pub fn get_or_acquire_cert(
+pub async fn get_or_acquire_cert(
     domain: &str,
     cache_dir: &Path,
     acme_email: Option<&str>,
@@ -66,17 +71,17 @@ pub fn get_or_acquire_cert(
     // 1. Try existing cert first — avoid re-requesting on restart
     if let Some(paths) = check_existing_cert(domain, cache_dir) {
         tracing::info!(%domain, cert = %paths.cert.display(), "Reusing existing ACME certificate");
-        spawn_renew_thread(domain, cache_dir, acme_email, Arc::clone(&stop));
+        spawn_renew_task(domain, cache_dir, acme_email, Arc::clone(&stop));
         return Ok((paths, stop));
     }
 
     // 2. Acquire new cert from Let's Encrypt
     tracing::info!(%domain, "Acquiring new ACME certificate");
-    let paths = acquire_cert_inner(domain, cache_dir, acme_email)?;
+    let paths = acquire_cert_inner(domain, cache_dir, acme_email).await?;
     // chmod 0o600 on private key
     set_key_permissions(&paths.key)?;
 
-    spawn_renew_thread(domain, cache_dir, acme_email, Arc::clone(&stop));
+    spawn_renew_task(domain, cache_dir, acme_email, Arc::clone(&stop));
     Ok((paths, stop))
 }
 
@@ -118,58 +123,84 @@ fn check_existing_cert(domain: &str, cache_dir: &Path) -> Option<AcmeCertPaths> 
 /// Perform a full ACME HTTP-01 challenge flow to obtain a certificate.
 ///
 /// Callers should use `get_or_acquire_cert` instead — this is the raw
-/// acquisition path, also used by the renew thread.
-fn acquire_cert_inner(
+/// acquisition path, also used by the renew task.
+async fn acquire_cert_inner(
     domain: &str,
     cache_dir: &Path,
     acme_email: Option<&str>,
 ) -> Result<AcmeCertPaths, Box<dyn std::error::Error + Send + Sync>> {
-    let account_key_path = cache_dir.join("account.key.pem");
-    let dir = Directory::from_url(DirectoryUrl::LetsEncrypt)?;
-    let contact = vec![format!(
-        "mailto:{}",
-        acme_email.unwrap_or("acme@amail-bridge.local")
-    )];
-
-    let acc = if account_key_path.exists() {
-        let pem = std::fs::read_to_string(&account_key_path)?;
-        dir.load_account(&pem, contact)?
-    } else {
-        let acc = dir.register_account(contact)?;
-        std::fs::write(&account_key_path, acc.acme_private_key_pem()?)?;
-        acc
-    };
-
+    let credentials_path = cache_dir.join("account.json");
     let cert_key_path = cache_dir.join(format!("{}.key.pem", domain));
     let cert_path = cache_dir.join(format!("{}.cert.pem", domain));
 
-    let mut ord_new = acc.new_order(domain, &[])?;
+    let contact = format!("mailto:{}", acme_email.unwrap_or("acme@amail-bridge.local"));
+    let directory_url = LetsEncrypt::Production.url().to_owned();
+    let builder = Account::builder()?;
 
-    let ord_csr = loop {
-        if let Some(ord_csr) = ord_new.confirm_validations() {
-            break ord_csr;
-        }
-        let auths = ord_new.authorizations()?;
-        if auths.is_empty() {
-            return Err("No authorizations available for domain".into());
-        }
-        let chall = auths[0]
-            .http_challenge()
-            .ok_or("HTTP challenge not available")?;
-        let token = chall.http_token().to_string();
-        let proof = chall.http_proof()?;
-
-        serve_challenge(&token, &proof)?;
-        chall.validate(Duration::from_secs(5))?;
-        ord_new.refresh()?;
+    // Create or restore account
+    let account = if credentials_path.exists() {
+        let json = std::fs::read_to_string(&credentials_path)?;
+        let creds: AccountCredentials = serde_json::from_str(&json)?;
+        builder.from_credentials(creds).await?
+    } else {
+        let (account, credentials) = builder
+            .create(
+                &NewAccount {
+                    contact: &[&contact],
+                    terms_of_service_agreed: true,
+                    only_return_existing: false,
+                },
+                directory_url,
+                None,
+            )
+            .await?;
+        // Persist account credentials for future renewals
+        std::fs::write(&credentials_path, serde_json::to_string_pretty(&credentials)?)?;
+        account
     };
 
-    let pkey = create_p384_key()?;
-    let ord_cert = ord_csr.finalize_pkey(pkey, Duration::from_secs(5))?;
-    let cert = ord_cert.download_cert()?;
+    // Create order
+    let identifiers = vec![Identifier::Dns(domain.to_string())];
+    let mut order = account
+        .new_order(&NewOrder::new(&identifiers))
+        .await?;
 
-    std::fs::write(&cert_key_path, cert.private_key())?;
-    std::fs::write(&cert_path, cert.certificate())?;
+    // Process authorizations — serve HTTP-01 challenges
+    let mut authorizations = order.authorizations();
+    while let Some(result) = authorizations.next().await {
+        let mut authz = result?;
+        match authz.status {
+            instant_acme::AuthorizationStatus::Pending => {}
+            instant_acme::AuthorizationStatus::Valid => continue,
+            _ => return Err(format!("unexpected authorization status: {:?}", authz.status).into()),
+        }
+
+        let mut challenge = authz
+            .challenge(ChallengeType::Http01)
+            .ok_or("no HTTP-01 challenge available")?;
+
+        let key_auth = challenge.key_authorization();
+        let token = challenge.token.clone();
+        let proof = key_auth.as_str().to_string();
+
+        // Serve the challenge on port 80 (synchronous TCP, brief)
+        serve_challenge(&token, &proof)?;
+
+        challenge.set_ready().await?;
+    }
+
+    // Wait for order to become ready
+    let status = order.poll_ready(&RetryPolicy::default()).await?;
+    if status != OrderStatus::Ready {
+        return Err(format!("unexpected order status: {status:?}").into());
+    }
+
+    // Finalize — get private key and certificate chain
+    let private_key_pem = order.finalize().await?;
+    let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
+
+    std::fs::write(&cert_key_path, &private_key_pem)?;
+    std::fs::write(&cert_path, &cert_chain_pem)?;
 
     // Lock down private key file
     set_key_permissions(&cert_key_path)?;
@@ -260,20 +291,30 @@ fn serve_challenge(
 
 // ── Background renew ──────────────────────────────────────────────
 
-/// Spawn a background thread that renews the certificate periodically.
-fn spawn_renew_thread(domain: &str, cache_dir: &Path, email: Option<&str>, stop: Arc<AtomicBool>) {
+/// Spawn a background tokio task that renews the certificate periodically.
+fn spawn_renew_task(
+    domain: &str,
+    cache_dir: &Path,
+    email: Option<&str>,
+    stop: Arc<AtomicBool>,
+) {
     let d = domain.to_string();
     let c = cache_dir.to_path_buf();
     let e = email.map(|s| s.to_string());
-    std::thread::spawn(move || {
-        renew_loop(&d, &c, e.as_deref(), stop);
+    tokio::spawn(async move {
+        renew_loop(&d, &c, e.as_deref(), stop).await;
     });
 }
 
 /// Background renew loop — checks every 12 hours, renews after ~60 days.
 ///
 /// Polls `stop` flag every 10 seconds so the caller can signal a clean exit.
-fn renew_loop(domain: &str, cache_dir: &Path, email: Option<&str>, stop: Arc<AtomicBool>) {
+async fn renew_loop(
+    domain: &str,
+    cache_dir: &Path,
+    email: Option<&str>,
+    stop: Arc<AtomicBool>,
+) {
     let cert_path = cache_dir.join(format!("{}.cert.pem", domain));
     let renew_age = Duration::from_secs(60 * 86400);
 
@@ -281,10 +322,10 @@ fn renew_loop(domain: &str, cache_dir: &Path, email: Option<&str>, stop: Arc<Ato
         // Sleep in 10-second increments so stop flag is checked frequently
         for _ in 0..(12 * 3600 / 10) {
             if stop.load(Ordering::Relaxed) {
-                tracing::info!(%domain, "ACME renew thread: stop flag received, exiting");
+                tracing::info!(%domain, "ACME renew task: stop flag received, exiting");
                 return;
             }
-            std::thread::sleep(Duration::from_secs(10));
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
 
         let needs_renew = match std::fs::metadata(&cert_path) {
@@ -306,9 +347,8 @@ fn renew_loop(domain: &str, cache_dir: &Path, email: Option<&str>, stop: Arc<Ato
         }
 
         tracing::info!(%domain, "Renewing ACME certificate...");
-        match acquire_cert_inner(domain, cache_dir, email) {
+        match acquire_cert_inner(domain, cache_dir, email).await {
             Ok(paths) => {
-                // acquire_cert_inner writes directly to cert_path/key_path
                 let _ = set_key_permissions(&paths.key);
                 tracing::info!(%domain, cert = %paths.cert.display(), "ACME certificate renewed");
             }

@@ -396,7 +396,7 @@ pub async fn start_push_server(
                     let cache = config.push.acme_cache.clone()
                         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
                     tracing::info!(%domain, cache = %cache.display(), "Attempting ACME certificate...");
-                    match crate::acme::get_or_acquire_cert(&domain, &cache, None) {
+                    match crate::acme::get_or_acquire_cert(&domain, &cache, None).await {
                         Ok((paths, stop)) => {
                             tracing::info!("ACME succeeded — using auto-cert");
                             acme_stop = Some(stop);
