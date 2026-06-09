@@ -16,11 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             platform: linux-amd64
             ext: ""
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             platform: linux-arm64
             ext: ""
@@ -40,6 +40,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install deps (musl)
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -53,7 +57,6 @@ jobs:
         run: |
           BIN="amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}"
           cp target/${{ matrix.target }}/release/amail-bridge${{ matrix.ext }} "$BIN"
-          echo "BIN=$BIN" >> $GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
