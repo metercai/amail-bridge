@@ -519,6 +519,8 @@ async fn handle_batch_webhook(
     // Shared body = payload minus the signatures array
     let mut shared_body = batch.clone();
     let _ = shared_body.as_object_mut().map(|o| o.remove("signatures"));
+    // Serialize once per batch, not per entry
+    let body_bytes = axum::body::Bytes::from(serde_json::to_vec(&shared_body).unwrap_or_default());
 
     let total = sigs.len();
     let mut delivered = 0usize;
@@ -547,7 +549,7 @@ async fn handle_batch_webhook(
             .header("x-webhook-signature", sig)
             .header("x-mailrelay-timestamp", ts)
             .header("content-type", "application/json")
-            .json(&shared_body)
+            .body(body_bytes.clone())
             .send()
             .await
         {
