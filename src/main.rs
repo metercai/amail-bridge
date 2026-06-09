@@ -27,8 +27,6 @@ use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tracing_subscriber::EnvFilter;
-
 use crate::config::BridgeConfig;
 
 /// CLI args parsed before daemonize (no async / tokio dependency).
@@ -212,27 +210,13 @@ async fn async_main(
         .install_default()
         .expect("failed to install ring crypto provider");
 
-    // Init tracing — log to file if daemonized, stderr otherwise
-    if cli.daemon {
-        let log_writer = std::fs::OpenOptions::new()
-            .create(true).append(true).open(&log_file)?;
-        tracing_subscriber::fmt()
-            .with_writer(std::sync::Mutex::new(log_writer))
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-            )
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-            )
-            .init();
-    }
+    let config = BridgeConfig::load(cli.config_path.as_deref())?;
+
+    // Init tracing from config (amail-gateway compatible)
+    init_tracing(&config.logging, cli.daemon, &log_file);
 
     tracing::info!("amail-bridge starting (pid={})", process::id());
 
-    let config = BridgeConfig::load(cli.config_path.as_deref())?;
     config.validate();
     let router = Arc::new(router::ProfileRouter::new(
         &config.default_profile_dir,
@@ -282,4 +266,39 @@ async fn async_main(
     }
 
     Ok(())
+}
+
+/// Initialize tracing subscriber from LoggingConfig (amail-gateway compatible).
+/// When daemon mode is active, log file from CLI args takes precedence.
+fn init_tracing(cfg: &crate::config::LoggingConfig, daemon: bool, daemon_log: &std::path::Path) {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&cfg.level));
+
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false);
+
+    // Determine log destination: daemon log file > config log file > stdout
+    let writer: Box<dyn std::io::Write + Send> = if daemon {
+        let file = std::fs::OpenOptions::new()
+            .create(true).append(true).open(daemon_log)
+            .unwrap_or_else(|e| panic!("failed to open daemon log file {:?}: {}", daemon_log, e));
+        Box::new(file)
+    } else if let Some(ref path) = cfg.file {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true).append(true).open(path)
+            .unwrap_or_else(|e| panic!("failed to open log file {:?}: {}", path, e));
+        Box::new(file)
+    } else {
+        Box::new(std::io::stdout())
+    };
+
+    let (non_blocking, _guard) = tracing_appender::non_blocking(writer);
+    builder.with_writer(non_blocking).init();
+    std::mem::forget(_guard);
 }

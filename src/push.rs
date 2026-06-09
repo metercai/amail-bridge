@@ -261,7 +261,6 @@ struct HealthResponse {
     status: &'static str,
     uptime_secs: u64,
     version: &'static str,
-    mode: String,
 }
 
 async fn health(State(state): State<PushState>) -> impl IntoResponse {
@@ -269,7 +268,6 @@ async fn health(State(state): State<PushState>) -> impl IntoResponse {
         status: "ok",
         uptime_secs: state.startup.elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION"),
-        mode: state.config.mode.clone(),
     })
 }
 

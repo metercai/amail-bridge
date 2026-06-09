@@ -29,6 +29,10 @@ pub struct BridgeConfig {
     /// Example: `".*@admin.relay" = "192.168.1.2"`
     #[serde(default, deserialize_with = "deserialize_hosts_vec")]
     pub hosts: Vec<(String, String)>,
+
+    /// Logging configuration.
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 /// Custom deserializer: reads a TOML table into a Vec, preserving insertion order.
@@ -176,10 +180,29 @@ pub struct PullConfig {
     pub system_id: String,
 }
 
+/// Logging configuration (amail-gateway compatible).
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_log_level")]
+    pub level: String,
+    #[serde(default)]
+    pub file: Option<PathBuf>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            file: None,
+        }
+    }
+}
+
 // Default helpers
 fn default_mode() -> String { "pull".into() }
 fn default_push_addr() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
+fn default_log_level() -> String { "info".into() }
 
 impl Default for PullConfig {
     fn default() -> Self {

@@ -2,6 +2,11 @@
 
 mode = "pull"  # "push" or "pull" (default: "pull")
 
+# Logging (amail-gateway compatible)
+# [logging]
+# level = "info"                    # log level (default: "info")
+# file = "/var/log/amail-bridge.log" # log file path, stdout if unset (default: none)
+
 # Per-agent host overrides for multi-machine deployments.
 # Regex → IP/hostname. First match wins. Unmatched agents default to 127.0.0.1.
 [hosts]
