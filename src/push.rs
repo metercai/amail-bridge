@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::{
     body::Bytes,
@@ -19,8 +20,9 @@ use axum::{
     middleware,
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde::Serialize;
 
 
 use crate::config::BridgeConfig;
@@ -32,6 +34,7 @@ pub struct PushState {
     pub router: Arc<ProfileRouter>,
     pub http_client: reqwest::Client,
     pub config: BridgeConfig,
+    pub startup: Instant,
 }
 
 /// IP/CIDR allowlist.  Empty = allow all.  Otherwise, only requests from
@@ -253,13 +256,21 @@ async fn check_rate_limit(
     Ok(next.run(request).await)
 }
 
-async fn health(State(state): State<PushState>) -> String {
-    format!(
-        "amail-bridge push mode OK\nroutes: {}\nbinding: {}:{}\n",
-        state.router.route_count(),
-        state.config.push.parsed_addr().0,
-        state.config.push.parsed_addr().1,
-    )
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    uptime_secs: u64,
+    version: &'static str,
+    mode: String,
+}
+
+async fn health(State(state): State<PushState>) -> impl IntoResponse {
+    Json(HealthResponse {
+        status: "ok",
+        uptime_secs: state.startup.elapsed().as_secs(),
+        version: env!("CARGO_PKG_VERSION"),
+        mode: state.config.mode.clone(),
+    })
 }
 
 /// Transparent webhook proxy.
@@ -360,6 +371,7 @@ pub async fn start_push_server(
             .timeout(std::time::Duration::from_secs(30))
             .build()?,
         config: config.clone(),
+        startup: Instant::now(),
     };
 
     let app = build_push_router(state);

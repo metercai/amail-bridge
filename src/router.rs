@@ -178,6 +178,7 @@ impl ProfileRouter {
             .get(email).cloned()
     }
 
+    #[allow(dead_code)]
     pub fn route_count(&self) -> usize {
         self.routes.read().unwrap_or_else(|e| e.into_inner()).len()
     }
