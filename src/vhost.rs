@@ -70,7 +70,7 @@ pub fn build_routes(configs: &[VhostSiteConfig]) -> Vec<(String, VhostRoute)> {
 }
 
 /// Handle a request via the given vhost route.
-pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Option<std::net::IpAddr>) -> Response {
+pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Option<std::net::IpAddr>, body_limit_mb: u32) -> Response {
     tracing::info!(?route, "Vhost request");
     match route {
         VhostRoute::Redirect(url) => {
@@ -156,7 +156,7 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Opt
 
             // Convert axum Body to bytes for reqwest (matches push body_limit_mb default)
             let axum_body = req.into_body();
-            let body_bytes = axum::body::to_bytes(axum_body, 20 * 1024 * 1024)
+            let body_bytes = axum::body::to_bytes(axum_body, (body_limit_mb as usize) * 1024 * 1024)
                 .await
                 .unwrap_or_default();
             let forwarded = client
