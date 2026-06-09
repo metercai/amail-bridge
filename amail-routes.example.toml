@@ -8,7 +8,7 @@
 #
 # Two types of entries:
 #   "exact@email"      = "host:port"   # exact email override
-#   "regex-pattern"    = "host:port"   # expanded to all matching emails
+#   "regex-pattern"    = "host:port"   # applies to all matching emails
 
 "alice@admin.relay"  = "127.0.0.1:8645"
 ".*@admin\\.relay"   = "192.168.1.2:8645"
