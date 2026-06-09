@@ -193,11 +193,15 @@ pub fn build_push_router(state: PushState) -> Router {
             crate::vhost::build_routes(&state.config.push.sites)
         );
         let vr = vhost_routes.clone();
-        router = router.fallback(move |req| {
+        router = router.fallback(move |req: axum::http::Request<axum::body::Body>| {
             let vr = vr.clone();
             async move {
+                // Extract client IP from axum's ConnectInfo extension
+                let client_ip = req.extensions()
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .map(|ci| ci.0.ip());
                 if let Some(route) = crate::vhost::find_vhost(&req, &vr) {
-                    return crate::vhost::handle_vhost(route, req).await;
+                    return crate::vhost::handle_vhost(route, req, client_ip).await;
                 }
                 axum::http::Response::builder()
                     .status(404)

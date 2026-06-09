@@ -70,7 +70,7 @@ pub fn build_routes(configs: &[VhostSiteConfig]) -> Vec<(String, VhostRoute)> {
 }
 
 /// Handle a request via the given vhost route.
-pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
+pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>, client_ip: Option<std::net::IpAddr>) -> Response {
     tracing::info!(?route, "Vhost request");
     match route {
         VhostRoute::Redirect(url) => {
@@ -151,7 +151,8 @@ pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
             req_headers.insert("x-forwarded-proto",
                 axum::http::HeaderValue::from_static("https"));
             req_headers.insert("x-forwarded-for",
-                axum::http::HeaderValue::from_static("unknown"));
+                axum::http::HeaderValue::from_str(&client_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "unknown".into()))
+                    .unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")));
 
             // Convert axum Body to bytes for reqwest (10MB limit for proxy req bodies)
             let axum_body = req.into_body();
