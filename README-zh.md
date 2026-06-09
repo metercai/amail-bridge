@@ -206,7 +206,7 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 |---|---|
 | `AMAIL_BRIDGE_MODE` | `mode` |
 | `AMAIL_BRIDGE_HOSTNAME` | `push.hostname` |
-| `AMAIL_BRIDGE_RELAY_URL` | `pull.amail_url` |
+| `AMAIL_GATEWAY_URL` | `pull.amail_url` |
 | `AMAIL_BRIDGE_ADMIN_KEY` | `pull.admin_key` |
 | `AMAIL_BRIDGE_SYSTEM_ID` | `pull.system_id` |
 | `AMAIL_BRIDGE_POLL_SECS` | `pull.poll_interval_sec` |
