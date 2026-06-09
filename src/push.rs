@@ -294,6 +294,7 @@ async fn handle_webhook(
 
     // ── Single mode (X-Amail-Email header) ───────────────────────
     // Resolve target from X-Amail-Email header
+    tracing::trace!(headers_len = headers.len(), "Webhook received");
     let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
         None => {
@@ -305,6 +306,7 @@ async fn handle_webhook(
         }
     };
 
+    tracing::trace!(%email, "Route lookup for webhook");
     let route = match state.router.lookup(&email) {
         Some(r) => r,
         None => {
@@ -318,6 +320,7 @@ async fn handle_webhook(
     };
 
     let target = route.target_url();
+    tracing::trace!(email = %email, host = %route.host, port = route.port, target = %target, "Forwarding to gateway");
     tracing::debug!(email = %email, host = %route.host, port = route.port, target = %target, "Forwarding webhook");
 
     // Forward only business headers — avoid leaking Host, Content-Length, etc.

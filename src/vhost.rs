@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use crate::config::VhostSiteConfig;
 
 /// A resolved virtual host route, ready to handle requests.
+#[derive(Debug)]
 pub enum VhostRoute {
     /// Serve static files from the given directory (SPA fallback enabled).
     Static(PathBuf),
@@ -70,6 +71,7 @@ pub fn build_routes(configs: &[VhostSiteConfig]) -> Vec<(String, VhostRoute)> {
 
 /// Handle a request via the given vhost route.
 pub async fn handle_vhost(route: &VhostRoute, req: Request<Body>) -> Response {
+    tracing::trace!(?route, "Vhost handler invoked");
     match route {
         VhostRoute::Redirect(url) => {
             axum::response::IntoResponse::into_response(

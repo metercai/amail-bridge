@@ -60,7 +60,8 @@ pub async fn start_pull_loop(
             Ok(batches) => {
                 consecutive_failures = 0;
                 if !batches.is_empty() {
-                    tracing::info!(batch_count = batches.len(), "Fetched pending deliveries");
+                    tracing::trace!(count = batches.len(), "Fetched pending deliveries");
+        tracing::info!(batch_count = batches.len(), "Fetched pending deliveries");
                 }
                 let mut ack_ids: Vec<i64> = Vec::new();
                 for batch in &batches {
@@ -106,7 +107,8 @@ pub async fn start_pull_loop(
 
                     match req_builder.send().await {
                         Ok(resp) if resp.status().is_success() => {
-                            tracing::info!(id = d.id, email = %d.email, "Forwarded successfully");
+                            tracing::trace!(id = d.id, email = %d.email, "Forward succeeded");
+                    tracing::info!(id = d.id, email = %d.email, "Forwarded successfully");
                             seen.insert(d.id, Instant::now());
                             ack_ids.push(d.id);
                         }
@@ -129,6 +131,7 @@ pub async fn start_pull_loop(
                 if !ack_ids.is_empty() {
                     match ack_deliveries(&state, &ack_ids).await {
                         Ok(count) => {
+                            tracing::trace!(count, "ACK response received");
                             tracing::info!(acked = count, "ACKed deliveries");
                         }
                         Err(e) => {
