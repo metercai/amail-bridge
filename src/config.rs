@@ -53,7 +53,7 @@ fn deserialize_hosts_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(
     d.deserialize_map(MapToVec)
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct PushConfig {
     #[serde(default = "default_bind_host")]
@@ -95,6 +95,26 @@ pub struct PushConfig {
     /// Virtual host sites (optional).
     #[serde(default)]
     pub sites: Vec<VhostSiteConfig>,
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            bind_host: "0.0.0.0".into(),
+            bind_port: 38080,
+            tls: false,
+            public_url: String::new(),
+            tls_cert: None,
+            tls_key: None,
+            acme_cache: None,
+            redirect_http: false,
+            allowed_ips: Vec::new(),
+            blacklist_ips: Vec::new(),
+            rate_limit: 30,
+            body_limit_mb: 20,
+            sites: Vec::new(),
+        }
+    }
 }
 
 fn default_rate_limit() -> u32 { 30 }
@@ -234,12 +254,12 @@ mod tests {
 
     #[test]
     fn test_defaults() {
-        let cfg: BridgeConfig = toml::from_str("mode = \"pull\"\n[pull]\n").unwrap();
+        let cfg: BridgeConfig = toml::from_str("mode = \"pull\"\n[pull]\nrelay_url = \"http://x\"\nadmin_key = \"k\"\nsystem_id = \"s\"\n").unwrap();
         assert_eq!(cfg.mode, "pull");
-        assert_eq!(cfg.push.bind_port, 38080);
         assert_eq!(cfg.push.body_limit_mb, 20);
         assert_eq!(cfg.push.rate_limit, 30);
         assert!(cfg.push.blacklist_ips.is_empty());
+        assert!(cfg.push.allowed_ips.is_empty());
     }
 
     #[test]

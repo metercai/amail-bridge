@@ -54,7 +54,6 @@ impl ProfileRouter {
         self.scan_profile_dir(&mut routes, &self.profiles_dir);
 
         // Step 2: default profile — ~/.hermes/ itself is a profile directory
-        // (contains amail.json + config.yaml).  load_route() handles file-not-found.
         if let Some(default_dir) = self.profiles_dir.parent() {
             if let Some(r) = self.load_route(default_dir) {
                 tracing::info!(email = %r.email, host = %r.host, port = r.port,
@@ -64,12 +63,14 @@ impl ProfileRouter {
         }
 
         // Step 3: merge manual overrides from routes file
-        self.merge_routes_file(&mut routes);
+        self.merge_routes_file_mut(&mut routes);
 
-        // Step 4: write the merged result back for visibility
+        let count = routes.len();
+        // Drop write lock before writing routes file (write_routes_file needs read lock)
+        drop(routes);
         self.write_routes_file();
 
-        tracing::info!(count = routes.len(), "Profile scan complete");
+        tracing::info!(count, "Profile scan complete");
     }
 
     fn scan_profile_dir(&self, routes: &mut HashMap<String, ProfileRoute>, dir: &Path) {
@@ -90,7 +91,7 @@ impl ProfileRouter {
     /// Merge manual overrides from ~/.hermes/amail-bridge-routes.toml.
     /// Existing auto-discovered entries are overwritten; entries only in
     /// the file are added (supports agents not yet auto-discovered).
-    fn merge_routes_file(&self, routes: &mut HashMap<String, ProfileRoute>) {
+    fn merge_routes_file_mut(&self, routes: &mut HashMap<String, ProfileRoute>) {
         let path = self.routes_file_path();
         let Some(path) = path else { return };
         let Ok(content) = std::fs::read_to_string(&path) else { return };
@@ -309,6 +310,7 @@ mod tests {
     #[test]
     fn test_full_scan_and_lookup() {
         let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("profiles")).unwrap();
         let prof = tmp.path().join("profiles").join("a1");
         make_profile(&prof, "a1@t.local", 8001);
         let router = ProfileRouter::new(tmp.path(), vec![]);
