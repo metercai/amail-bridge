@@ -11,14 +11,14 @@ surface area.
 
 ## Why bridge
 
-**Pain 1 — Multi-agent firewall penetration**: Each Hermes agent's gateway webhook
+**Pain 1 — Multi-agent firewall penetration**: Each Hermes agent's webhook
 runs on its own port (8645, 8646, …). Exposing them directly means N ports, N firewall
 rules. Bridge's push mode provides a **single entry port** with auto-routing to every
-gateway webhook — open just one port, all agents instantly reachable.
+webhook — open just one port, all agents instantly reachable.
 
 **Pain 2 — Zero-dependency email inbound**: No public IP? No port forwarding? Pull mode
 uses a single **outbound HTTP long-poll** — bridge actively fetches deliveries from
-relay and fans out to local gateway webhook ports. **Zero inbound ports, zero
+the gateway and fans out to local webhook ports. **Zero inbound ports, zero
 listen sockets**, complete NAT/firewall bypass.
 
 ---
@@ -27,8 +27,8 @@ listen sockets**, complete NAT/firewall bypass.
 
 ### Secure transparent pass-through
 
-Bridge holds zero HMAC secrets. Relay signs with each agent's webhook secret →
-bridge forwards headers & body verbatim → gateway verifies. Security boundary
+Bridge holds zero HMAC secrets. Gateway signs with each agent's webhook secret →
+bridge forwards headers & body verbatim → agent verifies. Security boundary
 unchanged. Push mode supports IP allowlist + blacklist + per-IP rate limiting;
 pull mode uses ACK-based consumption with 2-hour dedup cache — zero message loss,
 zero duplicates.
@@ -37,14 +37,13 @@ zero duplicates.
 
 Single binary ~8 MB (stripped, fat LTO). < 10 MB memory at idle, near-zero CPU.
 Pure Rust TLS stack — rustls with ring crypto. Zero OpenSSL, zero native-tls,
-zero system dependency beyond libc. `--daemon` double-fork daemon mode for
-systemd/Docker deployment. SIGINT/SIGTERM graceful drain with PID file cleanup.
+zero system dependency beyond libc. SIGINT/SIGTERM graceful drain.
 
 ### Efficient aggregated forwarding
 
-When one email reaches multiple recipients behind the same bridge, the relay
+When one email reaches multiple recipients behind the same bridge, the gateway
 sends a **single body copy** with per-recipient headers — bridge fans out to
-each gateway webhook port. Batch body serialized once, reused across all entries.
+each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
 
 ### Regex-based multi-machine routing
@@ -56,15 +55,13 @@ unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles
 
 ### Security hardening
 
-- **IP allowlist + blacklist** — push mode accepts POSTs only from trusted relay IPs
+- **IP allowlist + blacklist** — push mode accepts POSTs only from trusted source IPs
 - **Per-IP rate limiting** — configurable req/sec cap with sliding window (default 30)
 - **Body size limit** — configurable cap (default 20 MB) prevents memory exhaustion
 - **Header filtering** — only business headers forwarded (`x-amail-email`,
   `x-webhook-signature`, `x-mailrelay-timestamp`, `content-type`)
-- **Graceful shutdown** — SIGINT/SIGTERM drain in-flight requests, clean PID removal
-- **Path traversal prevention** — vhost static file serving validates resolved paths
+- **Graceful shutdown** — SIGINT/SIGTERM drain in-flight requests
 - **Connection pooling** — reqwest client reused across all forwards (keep-alive)
-- **Proxy headers** — vhost reverse-proxy correctly sets `X-Forwarded-*` headers
 - **HSTS on TLS only** — no HSTS header on plain HTTP (RFC 6797 compliance)
 
 ### Zero-config automation
@@ -74,7 +71,6 @@ unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles
 - **ACME auto-TLS** — set `hostname` → automatic Let's Encrypt certificate
   (HTTP-01 challenge), cached and auto-renewed every ~60 days
 - **Dual-port mode** — `addr` port 80 + `hostname` set → auto 80→443 redirect
-- **Daemon mode** — `--daemon` double-fork, PID file, log file, zero supervision
 
 ---
 
@@ -86,36 +82,36 @@ unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles
                        ┌─────────────────────────────────┐
                        │         amail-bridge             │
                        │  (single public port 38080)       │
-relay ──POST──►        │                                  │
-  alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► gateway webhook:8645
-  (one body copy)      │  bob   → 127.0.0.1:8646          │──► gateway webhook:8646
-                       │  carol → 127.0.0.1:8647          │──► gateway webhook:8647
+gateway ──POST──►      │                                  │
+  alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► webhook:8645
+  (one body copy)      │  bob   → 127.0.0.1:8646          │──► webhook:8646
+                       │  carol → 127.0.0.1:8647          │──► webhook:8647
                        └─────────────────────────────────┘
 ```
 
-- Relay POSTs to a **single port** on bridge; bridge auto-routes by agent email
-- Multiple recipients → relay sends **one body copy** (batch aggregation)
+- Gateway POSTs to a **single port** on bridge; bridge auto-routes by agent email
+- Multiple recipients → gateway sends **one body copy** (batch aggregation)
 - TLS via rustls; automatic Let's Encrypt certificate when `hostname` is set
 - Dual-port mode: `addr = "0.0.0.0:80"` + `hostname = "bridge.example.com"` → auto 80→443
-- Real-time: relay gets immediate HTTP response from gateway via bridge
+- Real-time: gateway gets immediate HTTP response from agent via bridge
 
 ### Pull — zero ports, email inbound through NAT
 
 ```
-relay (public)                               behind NAT/firewall
+gateway (public)                              behind NAT/firewall
   │                                               │
   │◄── POST /pending (poll every 10s) ────────────│ bridge (outbound only)
   │                                               │
   │── batches [{body, deliveries}] ──────────────►│
   │                                               │
-  │                                 ┌─────────────▼──────────────────┐
-  │                                 │ fan-out to each gateway webhook  │
-  │                                 │ ACK forwarded deliveries         │
-  │                                 └────────────────────────────────┘
+  │                                 ┌─────────────▼──────────────────────┐
+  │                                 │ fan-out to each agent webhook       │
+  │                                 │ ACK forwarded deliveries            │
+  │                                 └────────────────────────────────────┘
   │◄── POST /pending/ack ─────────────────────────│
 ```
 
-- Single **outbound HTTP connection** to relay, fully bypasses NAT/firewall
+- Single **outbound HTTP connection** to gateway, fully bypasses NAT/firewall
 - **Zero listen sockets** — no ports opened, no inbound traffic at all
 - Same batch aggregation: one body copy serialized once, reused for all recipients
 - ACK-based consumption + 2-hour dedup cache — no messages lost, no duplicates
@@ -143,16 +139,13 @@ EOF
 cat > amail_bridge.toml << 'EOF'
 mode = "pull"
 [pull]
-relay_url = "http://relay.example.com:38080"
+relay_url = "http://gateway.example.com:38080"
 admin_key = "sk-xxxxxxxx"
 system_id = "admin"
 EOF
 
-# Run (foreground)
+# Run
 ./target/release/amail-bridge
-
-# Or daemonize
-./target/release/amail-bridge --daemon
 
 # Check health
 curl http://localhost:38080/health
@@ -178,15 +171,6 @@ blacklist_ips = ["1.2.3.4"]          # permanently blocked IPs (default: [])
 allowed_ips = ["10.0.0.0/8"]         # IP allowlist, empty = allow all (default: [])
 rate_limit = 30                       # req/sec per source IP, 0 = disabled (default: 30)
 body_limit_mb = 20                    # max request body in MB (default: 20)
-
-# Virtual host sites (optional)
-# [[push.sites]]
-# domain = "www.example.com"
-# root = "/var/www/example"          # static site directory
-#
-# [[push.sites]]
-# domain = "api.example.com"
-# proxy = "127.0.0.1:3000"           # reverse proxy target
 ```
 
 ### Pull
@@ -195,8 +179,8 @@ body_limit_mb = 20                    # max request body in MB (default: 20)
 mode = "pull"
 
 [pull]
-relay_url = "http://relay.example.com:38080"
-admin_key = "sk-xxxxxxxx"            # system admin API key from relay
+relay_url = "http://gateway.example.com:38080"
+admin_key = "sk-xxxxxxxx"            # system admin API key from gateway
 system_id = "admin"                  # system ID for pending query (default: "admin")
 poll_interval_sec = 10               # poll interval in seconds (default: 10)
 ```
@@ -213,7 +197,7 @@ file = "/var/log/amail-bridge.log"   # log file, stdout if unset (default: none)
 
 ```toml
 [hosts]
-".*@admin.relay" = "192.168.1.2"    # all agents on this domain → this host
+".*@admin.com" = "192.168.1.2"      # all agents on this domain → this host
 "alice@example.com" = "10.0.0.5"    # specific agent → specific host
 ```
 
@@ -263,46 +247,12 @@ When `addr` port is 80 and `hostname` is set:
 
 ---
 
-## Deployment
-
-### systemd
-
-```ini
-[Unit]
-Description=amail-bridge
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/amail-bridge
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Docker
-
-```bash
-docker run -d \
-  -v ~/.hermes:/root/.hermes:ro \
-  -p 38080:38080 \
-  -p 80:80 \
-  --name amail-bridge \
-  ghcr.io/metercai/amail-bridge
-```
-
-> Port 80 is needed for ACME HTTP-01 challenges. Omit if using static certs.
-> The binary has `CAP_NET_BIND_SERVICE` or runs as root for port 80 binding.
-
----
-
 ## Network scenarios
 
 | Scenario | Mode | Notes |
 |---|---|---|
-| relay + gateway on same machine | Push | Bridge proxies single port to local gateway webhook ports |
-| relay public, gateway behind NAT | Pull | Bridge polls relay outbound, zero inbound ports |
+| gateway + agents on same machine | Push | Bridge proxies single port to local webhook ports |
+| gateway public, agents behind NAT | Pull | Bridge polls gateway outbound, zero inbound ports |
 | Bridge on public VPS | Push + TLS | `hostname = "bridge.example.com"`, ACME auto-cert, dual-port |
 | Multi-machine LAN | Push/Pull | `[hosts]` maps agent emails to machine IPs |
 
@@ -314,7 +264,7 @@ docker run -d \
 |---|---|
 | No routes | Profile directory has `amail.json` + `config.yaml`? |
 | Pull: no deliveries | `admin_key` scope correct? `system_id` matches? |
-| Push: 502 | Gateway webhook port listening? |
+| Push: 502 | Agent webhook port listening? |
 | Routes stale | `RUST_LOG=debug` to see inotify events |
 | ACME: fallback to HTTP | Domain resolves to bridge IP? Port 80 reachable? `RUST_LOG=debug` for ACME details |
 | Port 80 busy | Free port 80 or use static certs, or set `addr` port ≠ 80 |

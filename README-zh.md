@@ -3,21 +3,21 @@
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
 
 连接 [amail-gateway](https://github.com/metercai/amail-gateway) 和
-[Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook 端点的
+[Hermes agent](https://github.com/nousresearch/hermes-agent) webhook 端点的
 高性能透明桥接。以最小攻击面解决异构多 agent 部署的防火墙穿透问题。
 
 ---
 
 ## 为什么需要 bridge
 
-**痛点 1 — 多 agent 防火墙穿透**：每个 Hermes agent 的 gateway webhook 跑在各自的
-端口上（8645, 8646, …），直接暴露意味着 N 个端口、N 条防火墙规则。bridge 的 push
-模式提供一个**单一入口端口**，自动路由到所有 gateway webhook —— 只开一个端口，所有
+**痛点 1 — 多 agent 防火墙穿透**：每个 Hermes agent 的 webhook 跑在各自的端口上
+（8645, 8646, …），直接暴露意味着 N 个端口、N 条防火墙规则。bridge 的 push
+模式提供一个**单一入口端口**，自动路由到所有 webhook —— 只开一个端口，所有
 agent 即时可达。
 
 **痛点 2 — 零依赖邮件入站**：没有公网 IP？没有端口映射？pull 模式只需要一条**出站
-HTTP 长轮询**连接 —— bridge 主动从 relay 拉取投递并扇出到本地各 gateway webhook
-端口。**零入站端口、零监听 socket**，完全穿透 NAT/防火墙。
+HTTP 长轮询**连接 —— bridge 主动从 gateway 拉取投递并扇出到本地各 webhook 端口。
+**零入站端口、零监听 socket**，完全穿透 NAT/防火墙。
 
 ---
 
@@ -25,8 +25,8 @@ HTTP 长轮询**连接 —— bridge 主动从 relay 拉取投递并扇出到本
 
 ### 安全的透明透传
 
-bridge 不持有任何 HMAC 密钥。relay 用各 agent 的 webhook secret 签名 → bridge
-原样转发 headers + body → gateway 验签。安全边界不变。push 模式支持 IP 白名单
+bridge 不持有任何 HMAC 密钥。gateway 用各 agent 的 webhook secret 签名 → bridge
+原样转发 headers + body → agent 验签。安全边界不变。push 模式支持 IP 白名单
 + 黑名单 + 每 IP 限速；pull 模式基于 ACK 消费 + 2 小时去重缓存，零消息丢失、
 零重复投递。
 
@@ -34,14 +34,13 @@ bridge 不持有任何 HMAC 密钥。relay 用各 agent 的 webhook secret 签�
 
 单二进制约 8 MB（stripped, fat LTO）。空闲时内存 < 10 MB，CPU 近乎为零。纯 Rust
 TLS 栈 —— rustls + ring crypto。零 OpenSSL，零 native-tls，零系统依赖（仅 libc）。
-`--daemon` 双 fork 守护模式，systemd/Docker 原生支持。SIGINT/SIGTERM 优雅排空，
-PID 文件确保清理。
+SIGINT/SIGTERM 优雅排空。
 
 ### 高效的聚合转发
 
-同一封邮件多个收件人在同一 bridge 后方时，relay→bridge 只传**一份 body** +
-每人各自的 headers，bridge 再扇出到各 gateway webhook 端口。batch body 只序列化
-一次，所有条目复用。推拉模式均支持。
+同一封邮件多个收件人在同一 bridge 后方时，gateway→bridge 只传**一份 body** +
+每人各自的 headers，bridge 再扇出到各 webhook 端口。batch body 只序列化一次，
+所有条目复用。推拉模式均支持。
 
 ### 正则匹配的多机路由
 
@@ -51,15 +50,13 @@ PID 文件确保清理。
 
 ### 安全加固
 
-- **IP 白名单 + 黑名单** — push 模式仅接受受信 relay IP 的 POST
+- **IP 白名单 + 黑名单** — push 模式仅接受受信来源 IP 的 POST
 - **每 IP 限速** — 可配置 rps 上限，滑动窗口算法（默认 30）
 - **Body 大小限制** — 可配置上限（默认 20 MB），防止内存耗尽
 - **Header 过滤** — 只转发业务 header（`x-amail-email`, `x-webhook-signature`,
   `x-mailrelay-timestamp`, `content-type`）
-- **优雅关闭** — SIGINT/SIGTERM 排空进行中请求，PID 文件确保清理
-- **路径穿越防护** — vhost 静态文件服务校验解析后的路径必须在 root 目录下
+- **优雅关闭** — SIGINT/SIGTERM 排空进行中请求
 - **连接池复用** — reqwest client 全局复用，keep-alive 长连接
-- **标准代理头** — vhost 反向代理正确设置 `X-Forwarded-*` 头
 - **HSTS 仅 TLS 启用** — 纯 HTTP 不发送 HSTS（RFC 6797 要求浏览器忽略）
 
 ### 零配置自动化
@@ -69,7 +66,6 @@ PID 文件确保清理。
 - **ACME 自动 TLS** — 设置 `hostname` → 自动 Let's Encrypt 证书（HTTP-01 挑战），
   缓存复用，每 ~60 天自动续期
 - **双端口模式** — `addr` 端口 80 + `hostname` 已设 → 自动 80→443 重定向
-- **守护模式** — `--daemon` 双 fork，PID 文件、日志文件，零人工
 
 ---
 
@@ -81,36 +77,36 @@ PID 文件确保清理。
                        ┌─────────────────────────────────┐
                        │         amail-bridge             │
                        │  (单一公网端口 38080)              │
-relay ──POST──►        │                                  │
-  alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► gateway webhook:8645
-  (同一份 body)         │  bob   → 127.0.0.1:8646          │──► gateway webhook:8646
-                       │  carol → 127.0.0.1:8647          │──► gateway webhook:8647
+gateway ──POST──►      │                                  │
+  alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► webhook:8645
+  (同一份 body)         │  bob   → 127.0.0.1:8646          │──► webhook:8646
+                       │  carol → 127.0.0.1:8647          │──► webhook:8647
                        └─────────────────────────────────┘
 ```
 
-- relay 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由
-- 同一封邮件多个收件人 → relay 只传**一份 body**（批量聚合）
+- gateway 发到 bridge 的**单一端口**，bridge 按 agent 邮箱自动路由
+- 同一封邮件多个收件人 → gateway 只传**一份 body**（批量聚合）
 - TLS 由 rustls 提供；设 `hostname` 即可启用 ACME 自动证书
 - 双端口：`addr = "0.0.0.0:80"` + `hostname` → 自动 80→443
-- 实时性：relay 通过 bridge 即时获取 gateway HTTP 响应
+- 实时性：gateway 通过 bridge 即时获取 agent HTTP 响应
 
 ### Pull — 零端口，穿透 NAT 入站
 
 ```
-relay (公网)                              NAT/防火墙内
+gateway (公网)                              NAT/防火墙内
   │                                          │
   │◄── POST /pending (poll 每 10s) ──────────│ bridge (出站，无需开放端口)
   │                                          │
   │── batches [{body, deliveries}] ─────────►│
   │                                          │
-  │                            ┌─────────────▼──────────────────┐
-  │                            │ fan-out 到各 gateway webhook     │
-  │                            │ ACK 已转发的 delivery            │
-  │                            └────────────────────────────────┘
+  │                            ┌─────────────▼─────────────────┐
+  │                            │ fan-out 到各 agent webhook      │
+  │                            │ ACK 已转发的 delivery           │
+  │                            └───────────────────────────────┘
   │◄── POST /pending/ack ───────────────────│
 ```
 
-- 只需要**一条出站 HTTP 连接**到 relay，完全穿透 NAT/防火墙
+- 只需要**一条出站 HTTP 连接**到 gateway，完全穿透 NAT/防火墙
 - **零监听 socket**——不开放任何端口，不接收任何入站流量
 - 同样支持批量聚合：body 序列化一次，所有收件人复用
 - ACK 消费 + 2 小时去重缓存，不丢消息、不重复投递
@@ -138,16 +134,13 @@ EOF
 cat > amail_bridge.toml << 'EOF'
 mode = "pull"
 [pull]
-relay_url = "http://relay.example.com:38080"
+relay_url = "http://gateway.example.com:38080"
 admin_key = "sk-xxxxxxxx"
 system_id = "admin"
 EOF
 
-# 前台运行
+# 运行
 ./target/release/amail-bridge
-
-# 或后台守护
-./target/release/amail-bridge --daemon
 
 # 检查健康状态
 curl http://localhost:38080/health
@@ -173,15 +166,6 @@ blacklist_ips = ["1.2.3.4"]          # 永久封禁 IP（默认：[]）
 allowed_ips = ["10.0.0.0/8"]         # IP 白名单，空 = 全部放行（默认：[]）
 rate_limit = 30                       # 每源 IP req/sec，0 = 禁用（默认：30）
 body_limit_mb = 20                    # 请求体最大 MB（默认：20）
-
-# 虚拟主机站点（可选）
-# [[push.sites]]
-# domain = "www.example.com"
-# root = "/var/www/example"          # 静态站点目录
-#
-# [[push.sites]]
-# domain = "api.example.com"
-# proxy = "127.0.0.1:3000"           # 反向代理目标
 ```
 
 ### Pull
@@ -190,8 +174,8 @@ body_limit_mb = 20                    # 请求体最大 MB（默认：20）
 mode = "pull"
 
 [pull]
-relay_url = "http://relay.example.com:38080"
-admin_key = "sk-xxxxxxxx"            # relay 的 system admin API key
+relay_url = "http://gateway.example.com:38080"
+admin_key = "sk-xxxxxxxx"            # gateway 的 system admin API key
 system_id = "admin"                  # pending 查询用的系统 ID（默认："admin"）
 poll_interval_sec = 10               # 轮询间隔秒（默认：10）
 ```
@@ -208,7 +192,7 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 ```toml
 [hosts]
-".*@admin.relay" = "192.168.1.2"    # 域内所有 agent → 这台机器
+".*@admin.com" = "192.168.1.2"      # 域内所有 agent → 这台机器
 "alice@example.com" = "10.0.0.5"    # 指定 agent → 指定 IP
 ```
 
@@ -256,46 +240,12 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 ---
 
-## 部署
-
-### systemd
-
-```ini
-[Unit]
-Description=amail-bridge
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/amail-bridge
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Docker
-
-```bash
-docker run -d \
-  -v ~/.hermes:/root/.hermes:ro \
-  -p 38080:38080 \
-  -p 80:80 \
-  --name amail-bridge \
-  ghcr.io/metercai/amail-bridge
-```
-
-> 端口 80 用于 ACME HTTP-01 挑战。使用静态证书可不映射。
-> 二进制需 `CAP_NET_BIND_SERVICE` 或以 root 运行以绑定 80 端口。
-
----
-
 ## 网络场景
 
 | 场景 | 模式 | 说明 |
 |---|---|---|
-| relay+gateway 同机 | Push | bridge 单端口转发到本地各 gateway webhook 端口 |
-| relay 在公网，gateway 在 NAT 后 | Pull | bridge 出站轮询 relay，零入站端口 |
+| gateway+agent 同机 | Push | bridge 单端口转发到本地各 webhook 端口 |
+| gateway 在公网，agent 在 NAT 后 | Pull | bridge 出站轮询 gateway，零入站端口 |
 | 公网 VPS 部署 bridge | Push + TLS | `hostname = "bridge.example.com"`，ACME 自动证书，双端口 |
 | 多机 LAN 部署 | Push/Pull | `[hosts]` 配置各 agent 所在机器 IP |
 
@@ -307,7 +257,7 @@ docker run -d \
 |---|---|
 | 无路由 | profile 目录是否有 `amail.json` + `config.yaml` |
 | pull 无数据 | `admin_key` scope 正确？`system_id` 匹配？ |
-| push 502 | gateway webhook 端口是否在监听 |
+| push 502 | agent webhook 端口是否在监听 |
 | 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
 | ACME 回退到 HTTP | 域名解析到 bridge IP？80 端口公网可达？`RUST_LOG=debug` 看 ACME 详情 |
 | 80 端口被占 | 释放 80 端口或使用静态证书，或将 `addr` 设成非 80 端口 |
