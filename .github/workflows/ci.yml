@@ -12,5 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test
-      - run: cargo build --release
+      - name: Test
+        run: cargo test --verbose
+      - name: Release check
+        run: cargo build --release

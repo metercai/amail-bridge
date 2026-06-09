@@ -27,7 +27,7 @@ jobs:
             ext: ""
           # ── Linux glibc (minor runtime dep, wider ecosystem compat) ──
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-22.04
             platform: linux-amd64-gnu
             ext: ""
           - target: aarch64-unknown-linux-gnu
@@ -94,7 +94,7 @@ jobs:
             | Suffix | libc | Runtime deps | Compatible with |
             |--------|------|-------------|-----------------|
             | `linux-amd64` | musl | **none** | Any Linux kernel ≥ 2.6 |
-            | `linux-amd64-gnu` | glibc ≥ 2.31 | none | Ubuntu 20.04+, Debian 11+, RHEL 8+ |
+            | `linux-amd64-gnu` | glibc ≥ 2.35 | none | Ubuntu 22.04+, Debian 12+, RHEL 9+ |
             | `linux-arm64` | musl | **none** | Any Linux kernel ≥ 2.6 |
             | `linux-arm64-gnu` | glibc ≥ 2.39 | none | Ubuntu 24.04+, Debian 13+ |
             | `macos-amd64` | — | none | macOS 11+ (Intel) |
