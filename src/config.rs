@@ -10,6 +10,17 @@ pub struct BridgeConfig {
     #[serde(default = "default_mode")]
     pub mode: String, // "push" | "pull"
 
+    /// Listen address in "host:port" format (e.g. "0.0.0.0:38080").
+    /// Used for admin API (/health, /api/v1/routes) and push webhooks.
+    #[serde(default = "default_listen_addr")]
+    pub addr: String,
+
+    /// Allowed source IPs/CIDRs for admin API access.
+    /// Requests to /health and /api/v1/* from other IPs get 403.
+    /// Default: localhost only.
+    #[serde(default)]
+    pub admin_allowed_ips: Vec<String>,
+
     #[serde(default)]
     pub push: PushConfig,
 
@@ -28,7 +39,7 @@ pub struct BridgeConfig {
     #[serde(skip)]
     pub routes_file: PathBuf,
 
-    /// Per-agent host overrides (deprecated — use amail-routes.toml [hosts]).
+    /// Per-agent host overrides (deprecated — use amail-routes.toml).
     #[serde(default, deserialize_with = "deserialize_hosts_vec")]
     #[allow(dead_code)]
     pub hosts: Vec<(String, String)>,
@@ -36,6 +47,25 @@ pub struct BridgeConfig {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+}
+
+impl BridgeConfig {
+    /// Parse `addr` into (host, port). Default port: 80.
+    pub fn parsed_addr(&self) -> (&str, u16) {
+        if let Some((host, port_str)) = self.addr.rsplit_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                return (host, port);
+            }
+        }
+        (&self.addr, 80)
+    }
+
+    /// True when dual-port mode (80 → 443 redirect) is active.
+    /// Conditions: addr port == 80 AND push.hostname is set.
+    pub fn is_dual_port(&self) -> bool {
+        let (_, port) = self.parsed_addr();
+        port == 80 && self.push.hostname.is_some()
+    }
 }
 
 /// Custom deserializer: reads a TOML table into a Vec, preserving insertion order.
@@ -63,16 +93,10 @@ fn deserialize_hosts_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PushConfig {
-    /// Listen address in "host:port" format (e.g. "0.0.0.0:38080").
-    /// When port = 80 and hostname is set → dual-port mode (80 → 443 redirect).
-    #[serde(default = "default_push_addr")]
-    pub addr: String,
-
     /// Public hostname for TLS (e.g. "bridge.example.com").
     /// When set:
     ///   - TLS is enabled (tls_cert/tls_key or ACME auto-cert)
     ///   - If addr port == 80 → dual-port mode (80 redirects to 443)
-    ///   - Printed at startup as a hint for relay config
     #[serde(default)]
     pub hostname: Option<String>,
 
@@ -88,12 +112,11 @@ pub struct PushConfig {
     #[serde(default)]
     pub acme_cache: Option<PathBuf>,
 
-    /// IP/CIDR allowlist for DDoS protection. Only requests from
-    /// these addresses can POST webhooks. Empty = allow all.
+    /// IP/CIDR allowlist for webhook POSTs. Empty = allow all.
     #[serde(default)]
     pub allowed_ips: Vec<String>,
 
-    /// IP/CIDR blacklist. Blocked before allowlist check. Empty = none.
+    /// IP/CIDR blacklist for webhook POSTs. Empty = none.
     #[serde(default)]
     pub blacklist_ips: Vec<String>,
 
@@ -116,23 +139,6 @@ impl PushConfig {
         self.hostname.is_some()
     }
 
-    /// Parse `addr` into (host, port). If no port is specified, defaults to 80.
-    pub fn parsed_addr(&self) -> (&str, u16) {
-        if let Some((host, port_str)) = self.addr.rsplit_once(':') {
-            if let Ok(port) = port_str.parse::<u16>() {
-                return (host, port);
-            }
-        }
-        (&self.addr, 80)
-    }
-
-    /// True when dual-port mode (80 + 443) should be enabled.
-    /// Conditions: addr port == 80 AND hostname is set.
-    pub fn is_dual_port(&self) -> bool {
-        let (_, port) = self.parsed_addr();
-        port == 80 && self.hostname.is_some()
-    }
-
     /// Return the hostname or an empty string for display.
     pub fn hostname_or_empty(&self) -> &str {
         self.hostname.as_deref().unwrap_or("")
@@ -142,7 +148,6 @@ impl PushConfig {
 impl Default for PushConfig {
     fn default() -> Self {
         Self {
-            addr: "0.0.0.0:38080".into(),
             hostname: None,
             tls_cert: None,
             tls_key: None,
@@ -203,7 +208,7 @@ impl Default for LoggingConfig {
 
 // Default helpers
 fn default_mode() -> String { "pull".into() }
-fn default_push_addr() -> String { "0.0.0.0:38080".into() }
+fn default_listen_addr() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
 fn default_log_level() -> String { "info".into() }
 
@@ -247,22 +252,6 @@ impl BridgeConfig {
             cfg.hermes_home = Some(PathBuf::from(v));
         }
 
-        // Push/pull are mutually exclusive — push wins because it has
-        // lower latency and better efficiency when a public IP is available.
-        // A configured push section (hostname, tls_cert, or non-default addr)
-        // overrides an explicit pull mode.
-        let push_configured = cfg.push.hostname.is_some()
-            || cfg.push.tls_cert.is_some()
-            || cfg.push.tls_key.is_some()
-            || cfg.push.addr != *"0.0.0.0:38080";
-        if cfg.mode == "pull" && push_configured {
-            tracing::warn!(
-                "Push config detected (hostname/tls_cert) but mode is 'pull' — \
-                 push has lower latency, switching to push mode"
-            );
-            cfg.mode = "push".to_string();
-        }
-
         // Default profile dir
         let hermes_root = cfg.hermes_home.clone().unwrap_or_else(|| {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".hermes")
@@ -286,18 +275,18 @@ impl BridgeConfig {
                 tracing::warn!("pull.system_id is empty — pending query will fail");
             }
         }
-        if self.mode == "push" && self.push.hostname.is_some() && self.push.tls_cert.is_none() && self.push.tls_key.is_none() {
+        if self.push.hostname.is_some() && self.push.tls_cert.is_none() && self.push.tls_key.is_none() {
             tracing::info!("push.hostname is set — will attempt ACME auto-certificate");
         }
-        if self.push.is_dual_port() {
-            tracing::info!("push: dual-port mode enabled (port 80 → 443)");
+        if self.is_dual_port() {
+            tracing::info!("dual-port mode enabled (port 80 → 443)");
         }
     }
 
     /// Compile host patterns into (Regex, host) pairs for the router.
     #[allow(dead_code)]
     pub fn compiled_hosts(&self) -> Vec<(regex::Regex, String)> {
-        tracing::warn!("[hosts] in amail_bridge.toml is deprecated — use amail-routes.toml [hosts] instead");
+        tracing::warn!("[hosts] in amail_bridge.toml is deprecated — use amail-routes.toml instead");
         Vec::new()
     }
 }
@@ -316,52 +305,72 @@ admin_key = "k"
 system_id = "s"
 "#).unwrap();
         assert_eq!(cfg.mode, "pull");
+        assert_eq!(cfg.addr, "0.0.0.0:38080");
+        assert!(cfg.admin_allowed_ips.is_empty());
         assert_eq!(cfg.push.body_limit_mb, 20);
         assert_eq!(cfg.push.rate_limit, 30);
-        assert!(cfg.push.blacklist_ips.is_empty());
-        assert!(cfg.push.allowed_ips.is_empty());
-        assert_eq!(cfg.push.addr, "0.0.0.0:38080");
         assert!(cfg.push.hostname.is_none());
     }
 
     #[test]
-    fn test_push_config_with_limits() {
+    fn test_addr_with_port() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-[push]
-addr = "0.0.0.0:8080"
-hostname = "bridge.example.com"
-blacklist_ips = ["1.2.3.4"]
-allowed_ips = ["10.0.0.0/8"]
-rate_limit = 100
-body_limit_mb = 50
+addr = "127.0.0.1:8080"
 "#).unwrap();
-        assert_eq!(cfg.push.rate_limit, 100);
-        assert_eq!(cfg.push.body_limit_mb, 50);
-        assert_eq!(cfg.push.blacklist_ips, vec!["1.2.3.4"]);
-        assert_eq!(cfg.push.addr, "0.0.0.0:8080");
-        assert_eq!(cfg.push.hostname, Some("bridge.example.com".into()));
-        assert!(cfg.push.has_tls());
-        assert!(!cfg.push.is_dual_port()); // port is 8080, not 80
+        let (host, port) = cfg.parsed_addr();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn test_addr_default_port() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+addr = "0.0.0.0"
+"#).unwrap();
+        let (host, port) = cfg.parsed_addr();
+        assert_eq!(host, "0.0.0.0");
+        assert_eq!(port, 80);
     }
 
     #[test]
     fn test_dual_port_detection() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-[push]
 addr = "0.0.0.0:80"
+[push]
 hostname = "example.com"
 "#).unwrap();
-        assert!(cfg.push.is_dual_port());
+        assert!(cfg.is_dual_port());
+    }
+
+    #[test]
+    fn test_push_config_with_limits() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+addr = "0.0.0.0:8080"
+admin_allowed_ips = ["10.0.0.0/8"]
+[push]
+hostname = "bridge.example.com"
+blacklist_ips = ["1.2.3.4"]
+allowed_ips = ["10.0.0.0/8"]
+rate_limit = 100
+body_limit_mb = 50
+"#).unwrap();
+        assert_eq!(cfg.addr, "0.0.0.0:8080");
+        assert_eq!(cfg.admin_allowed_ips, vec!["10.0.0.0/8"]);
+        assert_eq!(cfg.push.rate_limit, 100);
+        assert_eq!(cfg.push.body_limit_mb, 50);
+        assert_eq!(cfg.push.hostname, Some("bridge.example.com".into()));
+        assert!(cfg.push.has_tls());
+        assert!(!cfg.is_dual_port()); // port is 8080, not 80
     }
 
     #[test]
     fn test_no_tls_without_hostname() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-[push]
-addr = "0.0.0.0:38080"
 "#).unwrap();
         assert!(!cfg.push.has_tls());
     }
@@ -386,7 +395,6 @@ redirect = "https://www.example.com"
 
     #[test]
     fn test_validate_pull_empty_warns() {
-        // Default pull config should warn on empty fields
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "pull"
 [pull]
@@ -394,27 +402,13 @@ amail_url = ""
 admin_key = ""
 system_id = ""
 "#).unwrap();
-        // These fields should be empty strings by default
         assert!(cfg.pull.amail_url.is_empty());
         assert!(cfg.pull.admin_key.is_empty());
         assert!(cfg.pull.system_id.is_empty());
     }
 
     #[test]
-    fn test_validate_push_with_hostname() {
-        let cfg: BridgeConfig = toml::from_str(r#"
-mode = "push"
-[push]
-addr = "0.0.0.0:38080"
-hostname = "x.com"
-"#).unwrap();
-        assert!(cfg.push.has_tls());
-        assert!(!cfg.push.is_dual_port());
-    }
-
-    #[test]
-    fn test_compiled_hosts_deprecated() {
-        // [hosts] in bridge config is deprecated — moved to amail-routes.toml
+    fn test_admin_allowed_ips_default_empty() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "pull"
 [pull]
@@ -422,13 +416,11 @@ amail_url = "http://x"
 admin_key = "k"
 system_id = "s"
 "#).unwrap();
-        let compiled = cfg.compiled_hosts();
-        assert!(compiled.is_empty(), "Deprecated [hosts] should return empty");
+        assert!(cfg.admin_allowed_ips.is_empty());
     }
 
     #[test]
-    fn test_compiled_hosts_deprecated_empty() {
-        // [hosts] is deprecated — always empty
+    fn test_compiled_hosts_deprecated() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "pull"
 [pull]
@@ -438,45 +430,5 @@ system_id = "s"
 "#).unwrap();
         let compiled = cfg.compiled_hosts();
         assert!(compiled.is_empty());
-    }
-
-    #[test]
-    fn test_parsed_addr_default_port() {
-        let cfg: BridgeConfig = toml::from_str(r#"
-mode = "push"
-[push]
-addr = "0.0.0.0"
-"#).unwrap();
-        let (host, port) = cfg.push.parsed_addr();
-        assert_eq!(host, "0.0.0.0");
-        assert_eq!(port, 80);
-    }
-
-    #[test]
-    fn test_parsed_addr_explicit_port() {
-        let cfg: BridgeConfig = toml::from_str(r#"
-mode = "push"
-[push]
-addr = "127.0.0.1:8080"
-"#).unwrap();
-        let (host, port) = cfg.push.parsed_addr();
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 8080);
-    }
-
-    #[test]
-    fn test_hostname_or_empty() {
-        let cfg: BridgeConfig = toml::from_str(r#"
-mode = "push"
-[push]
-hostname = "test.example.com"
-"#).unwrap();
-        assert_eq!(cfg.push.hostname_or_empty(), "test.example.com");
-
-        let cfg2: BridgeConfig = toml::from_str(r#"
-mode = "push"
-[push]
-"#).unwrap();
-        assert_eq!(cfg2.push.hostname_or_empty(), "");
     }
 }

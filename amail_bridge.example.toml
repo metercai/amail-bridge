@@ -2,6 +2,8 @@
 #
 # Copy this file to amail_bridge.toml and edit to match your setup.
 
+addr = "0.0.0.0:38080"           # Listen address for admin API + push webhooks
+admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 mode = "pull"  # "push" or "pull" (default: "pull")
 
 # Logging (amail-gateway compatible)
@@ -17,10 +19,9 @@ system_id = "admin"                     # System ID for pending-query (default: 
 poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 
 # ── Push mode (bridge receives external POSTs) ────────────────────
-# Uncomment to enable. addr format: "host:port". hostname enables TLS.
+# Uncomment to enable. hostname enables TLS.
 #
 # [push]
-# addr = "0.0.0.0:38080"                    # default: "0.0.0.0:38080"
 # hostname = "bridge.example.com"           # enables TLS (ACME auto-cert if no tls_cert/tls_key)
 # tls_cert = "/etc/ssl/bridge.crt"          # static TLS cert path
 # tls_key  = "/etc/ssl/bridge.key"          # static TLS key path
@@ -44,5 +45,5 @@ poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 # redirect = "https://www.example.com"       # 308 redirect URL
 
 # ── Multi-machine routing ─────────────────────────────────────────
-# Agent routing is now configured in amail-routes.toml (next to this file).
+# Agent routing is configured in amail-routes.toml (next to this file).
 # See amail-routes.example.toml for the format.

@@ -19,10 +19,8 @@ use axum::{
     http::{HeaderMap, HeaderName, StatusCode},
     middleware,
     response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    routing::post, Router,
 };
-use serde::Serialize;
 
 
 use crate::config::BridgeConfig;
@@ -160,7 +158,6 @@ fn ip_matches(ip: IpAddr, network: IpAddr, prefix: u8) -> bool {
 pub fn build_push_router(state: PushState) -> Router {
     let mut router = Router::new()
         .route("/webhooks/{*name}", post(handle_webhook))
-        .route("/health", get(health))
         .layer(DefaultBodyLimit::max((state.config.push.body_limit_mb as usize) * 1024 * 1024))
         .with_state(state.clone());
 
@@ -256,21 +253,6 @@ async fn check_rate_limit(
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
     Ok(next.run(request).await)
-}
-
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    uptime_secs: u64,
-    version: &'static str,
-}
-
-async fn health(State(state): State<PushState>) -> impl IntoResponse {
-    Json(HealthResponse {
-        status: "ok",
-        uptime_secs: state.startup.elapsed().as_secs(),
-        version: env!("CARGO_PKG_VERSION"),
-    })
 }
 
 /// Transparent webhook proxy.
@@ -378,40 +360,26 @@ async fn handle_webhook(
 }
 
 /// Start the push-mode HTTP server.
-pub async fn start_push_server(
+/// Start the push-mode HTTPS server with TLS (ACME or static certs).
+/// The app parameter is the fully assembled Router (admin + push routes).
+pub async fn start_push_tls(
     config: BridgeConfig,
-    router: Arc<ProfileRouter>,
+    app: axum::Router,
+    addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = PushState {
-        router: router.clone(),
-        http_client: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?,
-        config: config.clone(),
-        startup: Instant::now(),
-    };
-
-    let app = build_push_router(state);
-
-    let addr: SocketAddr = config.push.addr.parse()?;
-
-    // Print bridge URL hint for admin
+    // Print bridge URL hint
     let hostname = config.push.hostname_or_empty();
-    if !hostname.is_empty() {
-        let bridge_url = format!(
-            "https://{}/webhooks/amail-inbound",
-            hostname
-        );
-        tracing::info!("======================================================");
-        tracing::info!("  amail-bridge (push mode) running on {}", addr);
-        tracing::info!("  Hostname: {} ({})", hostname, if config.push.has_tls() { "TLS" } else { "plain" });
-        tracing::info!("  Add this to ~/.hermes/amail_relay.json:");
-        tracing::info!("    \"bridge_url\": \"{}\"", bridge_url);
-        tracing::info!("======================================================");
-    } else {
-        tracing::info!("amail-bridge (push mode) running on {}", addr);
-    }
+    let bridge_url = format!(
+        "https://{}/webhooks/amail-inbound",
+        hostname
+    );
+    tracing::info!("======================================================");
+    tracing::info!("  amail-bridge (push mode) running on {}", addr);
+    tracing::info!("  Hostname: {} ({})", hostname, if config.push.has_tls() { "TLS" } else { "plain" });
+    tracing::info!("  Add this to ~/.hermes/amail_relay.json:");
+    tracing::info!("    \"bridge_url\": \"{}\"", bridge_url);
+    tracing::info!("======================================================");
 
     if config.push.has_tls() {
         // Determine TLS cert source: static files > ACME > HTTP fallback
@@ -778,23 +746,6 @@ mod tests {
     fn test_parse_cidr_invalid_empty() {
         assert_eq!(parse_cidr(""), None);
         assert_eq!(parse_cidr("/24"), None);
-    }
-
-    #[tokio::test]
-    async fn test_health_response_shape() {
-        use std::time::Instant;
-        let state = PushState {
-            router: Arc::new(ProfileRouter::new(std::path::Path::new("/nonexistent"), std::path::PathBuf::from("/nonexistent/amail-routes.toml"))),
-            http_client: reqwest::Client::new(),
-            config: toml::from_str(r#"mode = "push"
-[push]
-"#).unwrap(),
-            startup: Instant::now(),
-        };
-        let resp = axum::response::IntoResponse::into_response(
-            health(State(state)).await
-        );
-        assert_eq!(resp.status(), 200);
     }
 
     #[tokio::test]

@@ -303,6 +303,31 @@ impl ProfileRouter {
         None
     }
 
+    /// Add or update a route for an exact email, then persist to file.
+    /// Used by the admin API and remote agent registration.
+    pub fn update_route(&self, email: &str, host: &str, port: u16) {
+        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
+        routes.insert(email.into(), ProfileRoute::new(email.into(), host.into(), port));
+        drop(routes);
+        let overrides = self.load_routes_file();
+        self.write_routes_file_with(&overrides);
+    }
+
+    /// Remove a route by exact email, then persist to file.
+    pub fn remove_route(&self, email: &str) {
+        let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
+        routes.remove(email);
+        drop(routes);
+        let overrides = self.load_routes_file();
+        self.write_routes_file_with(&overrides);
+    }
+
+    /// Return all current routes.
+    pub fn list_routes(&self) -> Vec<ProfileRoute> {
+        self.routes.read().unwrap_or_else(|e| e.into_inner())
+            .values().cloned().collect()
+    }
+
     #[allow(dead_code)]
     pub fn route_count(&self) -> usize {
         self.routes.read().unwrap_or_else(|e| e.into_inner()).len()

@@ -21,6 +21,7 @@ mod push;
 mod router;
 mod vhost;
 mod security;
+mod admin;
 
 use std::path::PathBuf;
 use std::process;
@@ -269,15 +270,70 @@ async fn async_main(
         shutdown_clone.store(true, Ordering::SeqCst);
     });
 
-    match config.mode.as_str() {
-        "push" => push::start_push_server(config, router, shutdown).await?,
-        "pull" => pull::start_pull_loop(config, router, shutdown).await?,
-        other => {
-            tracing::error!(mode = %other, "Unknown mode. Use 'push' or 'pull'.");
-            return Err(format!("Unknown mode: {other}").into());
-        }
+    // Build admin router (always starts — health + route API)
+    let admin_router = admin::build_admin_router(&config, router.clone());
+
+    // Build the full app: admin routes + optional push webhook routes
+    let app = if config.mode == "push" {
+        let push_state = push::PushState {
+            router: router.clone(),
+            http_client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()?,
+            config: config.clone(),
+            startup: std::time::Instant::now(),
+        };
+        let push_router = push::build_push_router(push_state);
+        admin_router.merge(push_router)
+    } else if config.mode != "pull" {
+        tracing::error!(mode = %config.mode, "Unknown mode. Use 'push' or 'pull'.");
+        return Err(format!("Unknown mode: {} (fix amail_bridge.toml)", config.mode).into());
+    } else {
+        admin_router
+    };
+
+    let app = crate::security::apply_security_headers(app);
+
+    let sock_addr: std::net::SocketAddr = config.addr.parse()?;
+
+    if config.mode == "push" && config.push.has_tls() {
+        // Push mode with TLS — start HTTPS server (uses config for TLS config)
+        let tls_config = config.clone();
+        push::start_push_tls(tls_config, app, sock_addr, shutdown.clone()).await?;
+    } else {
+        // HTTP server (all modes)
+        start_http(app, sock_addr, shutdown.clone()).await?;
     }
 
+    // Pull loop runs alongside the HTTP server
+    if config.mode == "pull" {
+        pull::start_pull_loop(config, router, shutdown).await?;
+    }
+
+    Ok(())
+}
+
+/// Start a plain HTTP server with graceful shutdown.
+async fn start_http(
+    app: axum::Router,
+    addr: std::net::SocketAddr,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let shutdown_signal = async move {
+        loop {
+            if shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    };
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
     Ok(())
 }
 
