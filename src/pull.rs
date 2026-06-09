@@ -63,6 +63,7 @@ pub async fn start_pull_loop(
                     tracing::info!(count = batches.len(), "Fetched pending deliveries");
                 }
                 let mut ack_ids: Vec<i64> = Vec::new();
+                let mut forwarded_emails: Vec<String> = Vec::new();
                 for batch in &batches {
                     for d in &batch.deliveries {
                     // Dedup: skip already-forwarded deliveries
@@ -107,6 +108,7 @@ pub async fn start_pull_loop(
                     match req_builder.send().await {
                         Ok(resp) if resp.status().is_success() => {
                             seen.insert(d.id, Instant::now());
+                            forwarded_emails.push(d.email.clone());
                             ack_ids.push(d.id);
                         }
                         Ok(resp) => {
@@ -128,10 +130,10 @@ pub async fn start_pull_loop(
                 if !ack_ids.is_empty() {
                     match ack_deliveries(&state, &ack_ids).await {
                         Ok(_) => {
-                            tracing::info!(forwarded = ack_ids.len(), "Pull cycle complete");
+                            tracing::info!(forwarded = ack_ids.len(), emails = ?forwarded_emails, "Pull cycle complete");
                         }
                         Err(e) => {
-                            tracing::error!(forwarded = ack_ids.len(), error = %e, "ACK failed — will retry");
+                            tracing::error!(forwarded = ack_ids.len(), emails = ?forwarded_emails, error = %e, "ACK failed — will retry");
                         }
                     }
                 }
