@@ -76,15 +76,6 @@ unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles
 - **Dual-port mode** — `addr` port 80 + `hostname` set → auto 80→443 redirect
 - **Daemon mode** — `--daemon` double-fork, PID file, log file, zero supervision
 
-### amail-gateway aligned
-
-- Config format: unified `addr = "host:port"` (not split host/port fields)
-- `hostname` → implies TLS (no redundant `tls = true` field)
-- Logging: same `[logging]` section with `level` + `file`, `init_tracing()` pattern
-- Health endpoint: `GET /health` returns `{"status":"ok","uptime_secs":N,"version":"x.y.z"}`
-- Operation logs: `info!()` on all core paths — webhook relayed, pull cycle complete,
-  routes scanned, ACME renewed
-
 ---
 
 ## Two modes

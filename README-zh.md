@@ -71,15 +71,6 @@ PID 文件确保清理。
 - **双端口模式** — `addr` 端口 80 + `hostname` 已设 → 自动 80→443 重定向
 - **守护模式** — `--daemon` 双 fork，PID 文件、日志文件，零人工
 
-### 与 amail-gateway 对齐
-
-- 配置格式：统一 `addr = "host:port"`（不拆分 host/port 字段）
-- `hostname` → 隐含 TLS 启用（无需冗余 `tls = true` 字段）
-- 日志系统：同款 `[logging]` 段，`level` + `file`，`init_tracing()` 模式
-- Health 端点：`GET /health` 返回 `{"status":"ok","uptime_secs":N,"version":"x.y.z"}`
-- 操作日志：所有核心路径 `info!()` 可见 — webhook 已转发、pull 周期完成、路由扫描、
-  ACME 续期
-
 ---
 
 ## 两种模式
