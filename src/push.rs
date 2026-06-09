@@ -391,7 +391,7 @@ pub async fn start_push_server(
             (config.push.tls_cert.clone().unwrap(), config.push.tls_key.clone().unwrap())
         } else if let Some(ref hostname) = config.push.hostname {
             let cache = config.push.acme_cache.clone()
-                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".hermes").join("acme"));
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("acme_cache"));
             tracing::info!(%hostname, cache = %cache.display(), "Attempting ACME certificate...");
             match crate::acme::get_or_acquire_cert(hostname, &cache, None).await {
                 Ok((paths, stop)) => {

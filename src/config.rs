@@ -77,7 +77,7 @@ pub struct PushConfig {
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
 
-    /// ACME certificate cache directory. Defaults to ~/.hermes/acme.
+    /// ACME certificate cache directory. Defaults to ./acme_cache.
     #[serde(default)]
     pub acme_cache: Option<PathBuf>,
 
