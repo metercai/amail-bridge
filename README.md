@@ -1,6 +1,7 @@
 # amail-bridge
 
 ![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
+![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-969696)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue)
 ![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)
 ![Security](https://img.shields.io/badge/Security-OpenSSL%200-brightgreen)
