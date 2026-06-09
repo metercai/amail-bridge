@@ -66,6 +66,7 @@ SIGINT/SIGTERM 优雅排空。
 - **ACME 自动 TLS** — 设置 `hostname` → 自动 Let's Encrypt 证书（HTTP-01 挑战），
   缓存复用，每 ~60 天自动续期
 - **双端口模式** — `addr` 端口 80 + `hostname` 已设 → 自动 80→443 重定向
+- **守护模式** — `--daemon` 双 fork，PID 文件、日志文件，无需看管
 
 ---
 
@@ -141,6 +142,9 @@ EOF
 
 # 运行
 ./target/release/amail-bridge
+
+# 或守护模式
+./target/release/amail-bridge --daemon
 
 # 检查健康状态
 curl http://localhost:38080/health

@@ -37,7 +37,8 @@ zero duplicates.
 
 Single binary ~8 MB (stripped, fat LTO). < 10 MB memory at idle, near-zero CPU.
 Pure Rust TLS stack — rustls with ring crypto. Zero OpenSSL, zero native-tls,
-zero system dependency beyond libc. SIGINT/SIGTERM graceful drain.
+zero system dependency beyond libc. `--daemon` double-fork daemon mode with
+PID file and log file. SIGINT/SIGTERM graceful drain.
 
 ### Efficient aggregated forwarding
 
@@ -71,6 +72,7 @@ unmatched agents default to `127.0.0.1`. Auto-discovered from Hermes profiles
 - **ACME auto-TLS** — set `hostname` → automatic Let's Encrypt certificate
   (HTTP-01 challenge), cached and auto-renewed every ~60 days
 - **Dual-port mode** — `addr` port 80 + `hostname` set → auto 80→443 redirect
+- **Daemon mode** — `--daemon` double-fork, PID file, log file, zero supervision
 
 ---
 
@@ -146,6 +148,9 @@ EOF
 
 # Run
 ./target/release/amail-bridge
+
+# Or daemonize
+./target/release/amail-bridge --daemon
 
 # Check health
 curl http://localhost:38080/health
