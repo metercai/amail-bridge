@@ -1,5 +1,4 @@
 //! Automatic TLS certificate acquisition & renewal via Let's Encrypt (ACME).
-#![cfg(feature = "tls")]
 //!
 //! ## Flow
 //!

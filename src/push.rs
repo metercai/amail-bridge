@@ -383,7 +383,6 @@ pub async fn start_push_server(
         tracing::info!("amail-bridge (push mode) running on {}", addr);
     }
 
-    #[cfg(feature = "tls")]
     if config.push.tls {
         // Determine TLS cert source: static files > ACME > HTTP fallback
         let mut acme_stop: Option<Arc<AtomicBool>> = None;
@@ -551,7 +550,6 @@ async fn handle_batch_webhook(
     }
 }
 
-#[cfg(feature = "tls")]
 fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
     let cert_file = std::fs::File::open(cert_path)?;
