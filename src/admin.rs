@@ -72,21 +72,6 @@ fn parse_ip_list(raw: &[String]) -> Vec<(std::net::IpAddr, u8)> {
     }).collect()
 }
 
-/// Check if an IP matches a CIDR entry.
-fn ip_matches(ip: std::net::IpAddr, network: std::net::IpAddr, prefix: u8) -> bool {
-    match (ip, network) {
-        (std::net::IpAddr::V4(ip), std::net::IpAddr::V4(net)) => {
-            let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
-            u32::from(ip) & mask == u32::from(net) & mask
-        }
-        (std::net::IpAddr::V6(ip), std::net::IpAddr::V6(net)) => {
-            let mask = if prefix == 0 { 0 } else { !0u128 << (128 - prefix) };
-            u128::from(ip) & mask == u128::from(net) & mask
-        }
-        _ => false,
-    }
-}
-
 /// Middleware: reject requests from IPs not in the admin allowlist.
 async fn check_admin_ip(
     State(allowed): State<Vec<(std::net::IpAddr, u8)>>,
@@ -98,7 +83,7 @@ async fn check_admin_ip(
         .map(|ci| ci.0.ip())
         .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
-    if allowed.is_empty() || allowed.iter().any(|&(net, pfx)| ip_matches(addr, net, pfx)) {
+    if allowed.is_empty() || allowed.iter().any(|&(net, pfx)| crate::security::ip_matches(addr, net, pfx)) {
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::FORBIDDEN)

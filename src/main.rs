@@ -281,7 +281,9 @@ async fn async_main(
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             config: config.clone(),
-            startup: std::time::Instant::now(),
+            forward_headers: config.forward_headers.iter().filter_map(|h| {
+                axum::http::HeaderName::from_bytes(h.as_bytes()).ok()
+            }).collect(),
         };
         let push_router = push::build_push_router(push_state);
         admin_router.merge(push_router)

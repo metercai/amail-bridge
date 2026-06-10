@@ -21,6 +21,13 @@ pub struct BridgeConfig {
     #[serde(default)]
     pub admin_allowed_ips: Vec<String>,
 
+    /// Forward headers that bridge passes through to gateway.
+    /// Single mode: whitelist filter (only these headers are forwarded).
+    /// Batch mode: per-recipient headers built from entry fields.
+    /// Default: standard amail relay headers.
+    #[serde(default = "default_forward_headers")]
+    pub forward_headers: Vec<String>,
+
     #[serde(default)]
     pub push: PushConfig,
 
@@ -163,6 +170,15 @@ impl Default for PushConfig {
 
 fn default_rate_limit() -> u32 { 30 }
 fn default_body_limit() -> u32 { 20 }
+
+fn default_forward_headers() -> Vec<String> {
+    vec![
+        "x-amail-email".into(),
+        "x-webhook-signature".into(),
+        "x-mailrelay-timestamp".into(),
+        "content-type".into(),
+    ]
+}
 
 /// TOML-deserialized virtual host site configuration.
 #[derive(Debug, Clone, Deserialize)]

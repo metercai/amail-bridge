@@ -37,7 +37,9 @@ pub async fn start_pull_loop(
     let seen_ttl = Duration::from_secs(7200);
     let poll_interval = config.pull.poll_interval_sec;
     let mut consecutive_failures: u32 = 0;
+    let mut consecutive_ack_failures: u32 = 0;
     const MAX_BACKOFF: u64 = 300; // 5 min
+    const ACK_FAIL_WARN_THRESHOLD: u32 = 10;
 
     tracing::info!(
         amail_url = %config.pull.amail_url,
@@ -134,9 +136,20 @@ pub async fn start_pull_loop(
                 if !ack_ids.is_empty() {
                     match ack_deliveries(&state, &ack_ids).await {
                         Ok(_) => {
+                            consecutive_ack_failures = 0;
                             tracing::info!(forwarded = ack_ids.len(), emails = ?forwarded_emails, "Pull cycle complete");
                         }
                         Err(e) => {
+                            consecutive_ack_failures += 1;
+                            if consecutive_ack_failures >= ACK_FAIL_WARN_THRESHOLD
+                                && consecutive_ack_failures % ACK_FAIL_WARN_THRESHOLD == 0
+                            {
+                                tracing::warn!(
+                                    count = consecutive_ack_failures,
+                                    "ACK has been failing for {} cycles — relay ACK endpoint may be down",
+                                    consecutive_ack_failures,
+                                );
+                            }
                             tracing::error!(forwarded = ack_ids.len(), emails = ?forwarded_emails, error = %e, "ACK failed — will retry");
                         }
                     }

@@ -18,6 +18,14 @@ admin_key = "sk-..."                    # System admin API key from relay
 system_id = "admin"                     # System ID for pending-query (default: "admin")
 poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 
+# ── Forward headers to gateway ──────────────────────────────────
+# Headers passed through to the gateway from relay.
+# Single mode: whitelist filter (only listed headers are forwarded).
+# Batch mode: listed headers are built from batch entry fields.
+# Supported names: x-amail-email, x-webhook-signature, x-mailrelay-timestamp, content-type
+# Default: all four amail relay standard headers
+# forward_headers = ["x-amail-email", "x-webhook-signature", "x-mailrelay-timestamp", "content-type"]
+
 # ── Push mode (bridge receives external POSTs) ────────────────────
 # Uncomment to enable. hostname enables TLS.
 #

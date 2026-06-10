@@ -32,7 +32,10 @@ pub struct PushState {
     pub router: Arc<ProfileRouter>,
     pub http_client: reqwest::Client,
     pub config: BridgeConfig,
-    pub startup: Instant,
+    /// Pre-parsed forward header names from config.
+    /// Single mode: whitelist filter — only these headers pass through.
+    /// Batch mode: per-recipient headers built with batch_header_value().
+    pub forward_headers: Vec<HeaderName>,
 }
 
 /// IP/CIDR allowlist.  Empty = allow all.  Otherwise, only requests from
@@ -62,7 +65,7 @@ impl IpAllowlist {
         if self.entries.is_empty() {
             return true; // no allowlist = allow all
         }
-        self.entries.iter().any(|&(network, prefix)| ip_matches(ip, network, prefix))
+        self.entries.iter().any(|&(network, prefix)| crate::security::ip_matches(ip, network, prefix))
     }
 }
 
@@ -101,7 +104,7 @@ impl IpBlacklist {
 
     pub fn blocks(&self, ip: IpAddr) -> bool {
         if self.entries.is_empty() { return false; }
-        self.entries.iter().any(|&(network, prefix)| ip_matches(ip, network, prefix))
+        self.entries.iter().any(|&(network, prefix)| crate::security::ip_matches(ip, network, prefix))
     }
 }
 
@@ -137,20 +140,6 @@ impl IpRateLimiter {
         }
         entry.1 += 1;
         true
-    }
-}
-
-fn ip_matches(ip: IpAddr, network: IpAddr, prefix: u8) -> bool {
-    match (ip, network) {
-        (IpAddr::V4(ip), IpAddr::V4(net)) => {
-            let mask = if prefix == 0 { 0 } else { !0u32 << (32 - prefix) };
-            u32::from(ip) & mask == u32::from(net) & mask
-        }
-        (IpAddr::V6(ip), IpAddr::V6(net)) => {
-            let mask = if prefix == 0 { 0 } else { !0u128 << (128 - prefix) };
-            u128::from(ip) & mask == u128::from(net) & mask
-        }
-        _ => false,
     }
 }
 
@@ -307,19 +296,11 @@ async fn handle_webhook(
     let target = route.target_url();
     tracing::info!(email = %email, host = %route.host, port = route.port, target = %target, "Webhook relayed");
 
-    // Forward only business headers — avoid leaking Host, Content-Length, etc.
-    // This whitelist is intentionally narrow: each header must have a known purpose.
-    // Adding a new relay→gateway header? Add it here and to the static list below.
-    use std::sync::LazyLock as Lazy;
-    static FWD_HEADERS: Lazy<[(HeaderName, &'static str); 4]> = Lazy::new(|| [
-        (HeaderName::from_static("x-amail-email"), "x-amail-email"),
-        (HeaderName::from_static("x-webhook-signature"), "x-webhook-signature"),
-        (HeaderName::from_static("x-mailrelay-timestamp"), "x-mailrelay-timestamp"),
-        (HeaderName::from_static("content-type"), "content-type"),
-    ]);
+    // Forward only configured headers — avoid leaking Host, Content-Length, etc.
+    // Header names come from config.forward_headers (default: standard amail relay headers).
     let mut fwd_headers = HeaderMap::new();
-    for (name, lookup) in FWD_HEADERS.iter() {
-        if let Some(val) = headers.get(*lookup) {
+    for name in &state.forward_headers {
+        if let Some(val) = headers.get(name.as_str()) {
             fwd_headers.insert(name.clone(), val.clone());
         }
     }
@@ -465,6 +446,23 @@ async fn start_push_http(
     Ok(())
 }
 
+/// Map a forward header name to its value for batch webhook entries.
+/// Returns None for unknown header names (skipped with debug log).
+fn batch_header_value(
+    name: &str,
+    email: &str,
+    sig: &str,
+    ts: &str,
+) -> Option<(&'static str, String)> {
+    match name {
+        "x-amail-email" => Some(("x-amail-email", email.to_string())),
+        "x-webhook-signature" => Some(("x-webhook-signature", sig.to_string())),
+        "x-mailrelay-timestamp" => Some(("x-mailrelay-timestamp", ts.to_string())),
+        "content-type" => Some(("content-type", "application/json".to_string())),
+        _ => None,
+    }
+}
+
 /// Handle multi-recipient webhook: payload has "signatures" array,
 /// payload itself IS the body (no "body" wrapper).
 /// Fan-out to each recipient's gateway with per-recipient headers.
@@ -488,7 +486,13 @@ async fn handle_batch_webhook(
     let mut shared_body = batch.clone();
     let _ = shared_body.as_object_mut().map(|o| o.remove("signatures"));
     // Serialize once per batch, not per entry
-    let body_bytes = axum::body::Bytes::from(serde_json::to_vec(&shared_body).unwrap_or_default());
+    let body_bytes = match serde_json::to_vec(&shared_body) {
+        Ok(b) => axum::body::Bytes::from(b),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to serialize shared body from batch payload");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Batch body serialization failed").into_response();
+        }
+    };
 
     let total = sigs.len();
     let mut delivered = 0usize;
@@ -511,15 +515,19 @@ async fn handle_batch_webhook(
         let sig = entry["signature"].as_str().unwrap_or("");
         let ts = entry["timestamp"].as_str().unwrap_or("");
 
-        match state.http_client
-            .post(target)
-            .header("x-amail-email", email)
-            .header("x-webhook-signature", sig)
-            .header("x-mailrelay-timestamp", ts)
-            .header("content-type", "application/json")
-            .body(body_bytes.clone())
-            .send()
-            .await
+        // Build request with config-driven forward headers
+        let mut req = state.http_client.post(target);
+        for name in &state.forward_headers {
+            match batch_header_value(name.as_str(), email, sig, ts) {
+                Some((hdr_name, value)) => {
+                    req = req.header(hdr_name, value);
+                }
+                None => {
+                    tracing::debug!(header = %name, "Unknown forward header — skipping");
+                }
+            }
+        }
+        match req.body(body_bytes.clone()).send().await
         {
             Ok(resp) if resp.status().is_success() => {
                 tracing::info!(email = %email, "Batch entry forwarded");
@@ -588,8 +596,8 @@ mod tests {
     fn test_ip_matches() {
         let ip: IpAddr = "192.168.1.50".parse().unwrap();
         let net: IpAddr = "192.168.1.0".parse().unwrap();
-        assert!(ip_matches(ip, net, 24));
-        assert!(!ip_matches(ip, net, 32));
+        assert!(crate::security::ip_matches(ip, net, 24));
+        assert!(!crate::security::ip_matches(ip, net, 32));
     }
 
     #[test]
@@ -653,32 +661,32 @@ mod tests {
     fn test_ip_matches_ipv6() {
         let ip: IpAddr = "2001:db8::1".parse().unwrap();
         let net: IpAddr = "2001:db8::".parse().unwrap();
-        assert!(ip_matches(ip, net, 32));
-        assert!(!ip_matches(ip, net, 128));
+        assert!(crate::security::ip_matches(ip, net, 32));
+        assert!(!crate::security::ip_matches(ip, net, 128));
     }
 
     #[test]
     fn test_ip_matches_prefix_0() {
         let v4: IpAddr = "1.2.3.4".parse().unwrap();
-        assert!(ip_matches(v4, "0.0.0.0".parse().unwrap(), 0));
+        assert!(crate::security::ip_matches(v4, "0.0.0.0".parse().unwrap(), 0));
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
-        assert!(ip_matches(v6, "::".parse().unwrap(), 0));
+        assert!(crate::security::ip_matches(v6, "::".parse().unwrap(), 0));
     }
 
     #[test]
     fn test_ip_matches_v4_v6_mismatch() {
         let v4: IpAddr = "192.168.1.1".parse().unwrap();
         let v6: IpAddr = "::ffff:192.168.1.1".parse().unwrap();
-        assert!(!ip_matches(v4, v6, 0));
-        assert!(!ip_matches(v6, v4, 0));
+        assert!(!crate::security::ip_matches(v4, v6, 0));
+        assert!(!crate::security::ip_matches(v6, v4, 0));
     }
 
     #[test]
     fn test_ip_matches_edge_cases() {
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
-        assert!(ip_matches(ip, ip, 32));
-        assert!(ip_matches("10.0.1.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
-        assert!(!ip_matches("10.0.2.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
+        assert!(crate::security::ip_matches(ip, ip, 32));
+        assert!(crate::security::ip_matches("10.0.1.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
+        assert!(!crate::security::ip_matches("10.0.2.5".parse().unwrap(), "10.0.1.0".parse().unwrap(), 24));
     }
 
     #[test]
@@ -757,7 +765,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let headers = HeaderMap::new();
         let body = Bytes::from_static(b"{\"hello\": \"world\"}");
@@ -774,7 +782,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let body = Bytes::from_static(b"not-json");
         let resp = handle_batch_webhook(State(state), body).await;
@@ -789,7 +797,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let body = Bytes::from_static(b"{\"body\": {}}");
         let resp = handle_batch_webhook(State(state), body).await;
@@ -804,7 +812,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let body = Bytes::from_static(b"{\"signatures\": []}");
         let resp = handle_batch_webhook(State(state), body).await;
@@ -819,7 +827,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let body = Bytes::from_static(b"{\"signatures\": [{\"signature\": \"sig\"}]}");
         let resp = handle_batch_webhook(State(state), body).await;
@@ -835,7 +843,7 @@ mod tests {
             config: toml::from_str(r#"mode = "push"
 [push]
 "#).unwrap(),
-            startup: Instant::now(),
+            forward_headers: vec![],
         };
         let body = Bytes::from_static(b"{\"signatures\": [{\"email\": \"nobody@x.com\", \"signature\": \"sig\"}]}");
         let resp = handle_batch_webhook(State(state), body).await;
