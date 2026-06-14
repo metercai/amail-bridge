@@ -4,12 +4,12 @@
 
 addr = "0.0.0.0:38080"           # Listen address for admin API + push webhooks
 admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
-mode = "pull"  # "push" or "pull" (default: "pull")
+# mode = "push"  # "push" or "pull" (default: "push")
 
 # Logging 
 # [logging]
 # level = "info"                    # log level (default: "info")
-# file = "/var/log/amail-bridge.log" # log file path, stdout if unset (default: none)
+file = "/var/log/amail-bridge.log"  # log file path (default: /var/log/amail-bridge.log)
 
 # ── Pull mode (bridge polls gateway outbound) ───────────────────────
 [pull]
@@ -33,7 +33,7 @@ poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 # hostname = "bridge.example.com"           # enables TLS (ACME auto-cert if no tls_cert/tls_key)
 # tls_cert = "/etc/ssl/bridge.crt"          # static TLS cert path
 # tls_key  = "/etc/ssl/bridge.key"          # static TLS key path
-# acme_cache = "./acme_cache"               # ACME cache dir (default: ./acme_cache)
+# acme_cache = "~/.acme_cache"              # ACME cache dir (default: ~/.acme_cache)
 # blacklist_ips = ["1.2.3.4", "10.0.0.0/8"] # permanently blocked IPs/CIDRs (default: [])
 # allowed_ips = ["10.0.0.0/8", "192.168.1.1"] # IP allowlist, empty = allow all (default: [])
 # rate_limit = 30                            # req/sec per source IP, 0 = disabled (default: 30)
