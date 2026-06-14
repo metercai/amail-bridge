@@ -29,7 +29,7 @@ pub struct BridgeConfig {
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
 
-    /// ACME certificate cache directory. Defaults to ./acme_cache.
+    /// ACME certificate cache directory. Defaults to ~/.acme_cache/
     #[serde(default)]
     pub acme_cache: Option<PathBuf>,
 
@@ -223,13 +223,13 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: default_log_level(),
-            file: None,
+            file: Some(PathBuf::from("/var/log/amail-bridge.log")),
         }
     }
 }
 
 // Default helpers
-fn default_mode() -> String { "pull".into() }
+fn default_mode() -> String { "push".into() }
 fn default_listen_addr() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
 fn default_log_level() -> String { "info".into() }
