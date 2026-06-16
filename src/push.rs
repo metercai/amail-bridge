@@ -469,7 +469,11 @@ async fn handle_batch_webhook(
         };
 
         let route = match state.router.lookup(email) {
-            Some(r) => r,
+            Some(r) => {
+                tracing::info!(email = %email, sig = %entry["signature"].as_str().unwrap_or(""), ts = %entry["timestamp"].as_str().unwrap_or(""),
+                    "Batch entry → route found");
+                r
+            }
             None => {
                 tracing::warn!(email = %email, "Batch entry has no route");
                 continue;

@@ -117,7 +117,7 @@ BRIDGE_PID=$!; sleep 2
 for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge push running"
 
-S() { curl -s -X POST "$B/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK}" "$@"; }
+S() { local code=$(curl -s -w "%{http_code}" -o /dev/null -X POST "$B/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK}" "$@" 2>/dev/null); echo "SEND: $code"; }
 
 # P1: single
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"P1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-1 single"
@@ -204,7 +204,7 @@ for i in $(seq 1 30); do
     grep -q "Starting pull loop" "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
     sleep 2
 done
-S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@"; }
+S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@" 2>/dev/null); echo "SEND: $code"; }
 
 # Q1: single
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Q1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-1 single: $n OK" || warn "Q-1 single: $n"
