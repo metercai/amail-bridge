@@ -116,11 +116,11 @@ sleep 3
 n=0; for i in $(seq 1 10); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
 [[ $n -ge 1 ]] && pass "5a: push OK ($n)" || fail "5a: push FAIL"
 
-kill -9 "$BRIDGE_PID" 2>/dev/null || true; wait "$BRIDGE_PID" 2>/dev/null || true
+kill -9 "$BRIDGE_PID" 2>/dev/null || true; sleep 3; wait "$BRIDGE_PID" 2>/dev/null || true
 
 # ════ 5b. Pull ════
 echo ""; echo "=== 5b. Pull Mode ==="
-kill -9 "$RELAY_PID" 2>/dev/null || true; wait "$RELAY_PID" 2>/dev/null || true; sleep 2
+kill -9 "$RELAY_PID" 2>/dev/null || true; sleep 5; wait "$RELAY_PID" 2>/dev/null || true
 rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 
 cat > "$WORK_DIR/relay.toml" << EOF
@@ -189,17 +189,18 @@ for i in $(seq 1 10); do
 done
 pass "bridge pull running"
 
-# Wait for pull loop to start (bridge init may take a while)
-for i in $(seq 1 20); do
-    grep -q 'Starting pull loop' "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
-    sleep 2
-done
-
+# Send email FIRST (relay creates pending while bridge initializes)
 rm -f "$HL"
 curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/send" \
     -H "X-Api-Key: ${SK2}" -H "Content-Type: application/json" \
     -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Pull Test","markdown":"Pull."}' > /dev/null
 sleep 3
+
+# Wait for pull loop to start (bridge init may take a while)
+for i in $(seq 1 25); do
+    grep -q 'Starting pull loop' "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
+    sleep 2
+done
 n=0; for i in $(seq 1 20); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
 [[ $n -ge 1 ]] && pass "5b: pull OK ($n)" || fail "5b: pull FAIL"
 
