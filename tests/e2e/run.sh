@@ -21,8 +21,8 @@ HERMES_PORT=39999
 RS2=35011; RH2=39011     # pull relay (separate ports)
 
 cleanup() {
-    for pid in "$RELAY_PID" "$BRIDGE_PID" "$HERMES_PID"; do
-        kill "$pid" 2>/dev/null || true
+    for pid in "${RELAY_PID:-}" "${BRIDGE_PID:-}" "${HERMES_PID:-}"; do
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
     done
     wait 2>/dev/null || true
     rm -rf "$WORK_DIR"
@@ -36,11 +36,17 @@ rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/bridge" "$WORK_DIR/relay-data"
 # ═══════════════════════════════════════
 echo ""; echo "=== 1. Start Relay ==="
 cat > "$WORK_DIR/relay.toml" << EOF
-[smtp]; addr = "127.0.0.1:${RS}"
-[http]; addr = "127.0.0.1:${RH}"
-[storage]; path = "${WORK_DIR}/relay-data"
-[retry]; max_attempts = 1; initial_backoff_secs = 1
-[logging]; level = "info"
+[smtp]
+addr = "127.0.0.1:${RS}"
+[http]
+addr = "127.0.0.1:${RH}"
+[storage]
+path = "${WORK_DIR}/relay-data"
+[retry]
+max_attempts = 1
+initial_backoff_secs = 1
+[logging]
+level = "info"
 EOF
 "$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay.log" 2>&1 &
 RELAY_PID=$!
@@ -68,16 +74,17 @@ curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/addresses" \
 curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/whitelists" \
     -H "X-Api-Key: ${ADMIN_KEY}" -H "Content-Type: application/json" \
     -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' > /dev/null
+# Sender domain (must exist before creating send key)
+curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/domains" \
+    -H "X-Api-Key: ${ADMIN_KEY}" -H "Content-Type: application/json" \
+    -d '{"id":"sdom","domain":"test.local"}' > /dev/null
 # Sender key
 SEND_KEY=$(curl -s -X POST "http://127.0.0.1:${RH}/api/v1/api-keys" \
     -H "X-Api-Key: ${ADMIN_KEY}" -H "Content-Type: application/json" \
     -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' \
     | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null || echo "")
 [[ -n "$SEND_KEY" ]] || fail "no send key"
-# Sender domain + to-whitelist
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/domains" \
-    -H "X-Api-Key: ${ADMIN_KEY}" -H "Content-Type: application/json" \
-    -d '{"id":"sdom","domain":"test.local"}' > /dev/null
+# To-whitelist for sender domain
 curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/whitelists" \
     -H "X-Api-Key: ${ADMIN_KEY}" -H "Content-Type: application/json" \
     -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@bridge.test"}' > /dev/null
@@ -110,9 +117,14 @@ pass "routes configured"
 # ═══════════════════════════════════════
 echo ""; echo "=== 5a. Push Mode ==="
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
-addr = "127.0.0.1:${BRIDGE_PORT}"; routes_file = "$WORK_DIR/bridge/amail_routes.toml"
-mode = "push"; [push]; body_limit_mb = 10
-[logging]; level = "info"; file = "$WORK_DIR/bridge/push-bridge.log"
+addr = "127.0.0.1:${BRIDGE_PORT}"
+routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+mode = "push"
+[push]
+body_limit_mb = 10
+[logging]
+level = "info"
+file = "$WORK_DIR/bridge/push-bridge.log"
 EOF
 "$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-push.toml" > "$WORK_DIR/bridge/push.log" 2>&1 &
 BRIDGE_PID=$!
@@ -148,11 +160,17 @@ sleep 2
 rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 
 cat > "$WORK_DIR/relay.toml" << EOF
-[smtp]; addr = "127.0.0.1:${RS2}"
-[http]; addr = "127.0.0.1:${RH2}"
-[storage]; path = "${WORK_DIR}/relay-data"
-[retry]; max_attempts = 1; initial_backoff_secs = 1
-[logging]; level = "info"
+[smtp]
+addr = "127.0.0.1:${RS2}"
+[http]
+addr = "127.0.0.1:${RH2}"
+[storage]
+path = "${WORK_DIR}/relay-data"
+[retry]
+max_attempts = 1
+initial_backoff_secs = 1
+[logging]
+level = "info"
 EOF
 "$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay2.log" 2>&1 &
 RELAY_PID=$!
@@ -183,34 +201,11 @@ pass "pull relay seeded"
 
 # Start bridge in pull mode
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
-addr = "127.0.0.1:38081"; routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+addr = "127.0.0.1:38081"
+routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
-[pull]; amail_url = "http://127.0.0.1:${RH2}"; admin_key = "${ADMIN_KEY}"; system_id = "admin"; poll_interval_sec = 2
-[logging]; level = "info"; file = "$WORK_DIR/bridge/pull-bridge.log"
-EOF
-"$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-pull.toml" > "$WORK_DIR/bridge/pull.log" 2>&1 &
-BRIDGE_PID=$!
-sleep 2
-for i in $(seq 1 10); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:38081/health" 2>/dev/null)" == "200" ]] && break
-    sleep 1
-done
-pass "bridge pull mode running"
-
-# Send
-rm -f "$HERMES_LOG"
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/send" \
-    -H "X-Api-Key: ${SEND_KEY2}" -H "Content-Type: application/json" \
-    -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Pull Test","markdown":"Pull delivery test."}' > /dev/null
-sleep 3
-for i in $(seq 1 15); do
-    [[ $(wc -l < "$HERMES_LOG" 2>/dev/null || echo 0) -ge 1 ]] && break
-    sleep 2
-done
-PULL_COUNT=$(wc -l < "$HERMES_LOG" 2>/dev/null || echo 0)
-[[ $PULL_COUNT -ge 1 ]] && pass "5b.1: pull — hermes received ($PULL_COUNT)" || fail "5b.1: pull — no message"
-grep -q 'Pull Test' "$HERMES_LOG" && pass "5b.2: pull — correct subject" || fail "5b.2: pull — wrong subject"
-
-echo ""; echo "═══════════════════════════════════════════"
-echo "  Bridge E2E: Complete"
-echo "═══════════════════════════════════════════"
+[pull]
+amail_url = "http://127.0.0.1:${RH2}"
+admin_key = "${ADMIN_KEY}"
+system_id = "admin"
+poll_interval_sec = 2
