@@ -282,6 +282,11 @@ impl BridgeConfig {
         cfg.default_profile_dir = hermes_root;
         cfg.routes_file = config_path.parent().unwrap_or(Path::new(".")).join("amail_routes.toml");
 
+        // Normalize amail_url: add http:// if no scheme present
+        if !cfg.pull.amail_url.contains("://") && !cfg.pull.amail_url.is_empty() {
+            cfg.pull.amail_url = format!("http://{}", cfg.pull.amail_url);
+        }
+
         Ok(cfg)
     }
 

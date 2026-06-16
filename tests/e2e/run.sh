@@ -182,7 +182,7 @@ addr = "127.0.0.1:${BP2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]
-amail_url = "http://127.0.0.1:${RH2}"
+amail_url = "127.0.0.1:${RH2}"
 admin_key = "${AK}"
 system_id = "admin"
 poll_interval_sec = 2
