@@ -126,7 +126,7 @@ rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subje
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test, agent2@bridge.test","subject":"P2-MultiTo","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -eq 2 ]] && pass "P-2 multi-to: $n OK" || warn "P-2 multi-to: $n (exp 2, but bridge may aggregate)"
 
 # P3: To+Cc
-rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","cc":"cc-agent@bridge.test","subject":"P3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "P-3 cc: $n OK" || warn "P-3 cc: $n"
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","cc":["cc-agent@bridge.test"],"subject":"P3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "P-3 cc: $n OK" || warn "P-3 cc: $n"
 
 # P4: empty body
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"empty@bridge.test","subject":"P4-Empty","markdown":""}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-4 empty"
@@ -138,6 +138,7 @@ rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"noroute@bridge.test","sub
 # P6: same-domain aggregate (3 recipients → 1 webhook)
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test, agent2@bridge.test, cc-agent@bridge.test","subject":"P6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "P-6 aggregate: $n OK" || warn "P-6 aggregate: $n"
 
+cp "$WORK_DIR/relay.log" "/tmp/relay-push-saved.log" 2>/dev/null || true
 kill -9 "$BRIDGE_PID" 2>/dev/null||true; sleep 3; wait "$BRIDGE_PID" 2>/dev/null||true
 
 # ═══════════════════════════════════
@@ -194,17 +195,11 @@ BRIDGE_PID=$!; sleep 2
 for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP2}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge pull running"
 # Wait for pull loop to start
-for i in $(seq 1 20); do
+for i in $(seq 1 25); do
     grep -q "Starting pull loop" "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
     sleep 2
 done
-
-# Wait for pull loop to start (concurrent with HTTP server)
-for i in $(seq 1 30); do
-    grep -q "Starting pull loop" "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
-    sleep 2
-done
-S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@" 2>/dev/null); echo "SEND: $code"; }
+S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@"; }
 
 # Q1: single
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Q1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-1 single: $n OK" || warn "Q-1 single: $n"
@@ -213,7 +208,7 @@ rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subjec
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test","subject":"Q2-Multi","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-2 multi: $n OK" || warn "Q-2 multi: $n"
 
 # Q3: To+Cc
-rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","cc":"cc-agent@pull.test","subject":"Q3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-3 cc: $n OK" || warn "Q-3 cc: $n"
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","cc":["cc-agent@pull.test"],"subject":"Q3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-3 cc: $n OK" || warn "Q-3 cc: $n"
 
 # Q4: empty body
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"empty@pull.test","subject":"Q4-Empty","markdown":""}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-4 empty: $n OK" || warn "Q-4 empty: $n"
