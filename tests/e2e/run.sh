@@ -73,9 +73,9 @@ for addr in agent@bridge.test agent2@bridge.test cc-agent@bridge.test empty@brid
         -d "{\"id\":\"a-${addr%@*}\",\"email\":\"$addr\",\"webhook_url\":\"$BASE:${BP}/webhooks/bridge\"}" >/dev/null
 done
 curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' >/dev/null
-SK=$(curl -s -X POST "$B/api/v1/api-keys" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null||echo "")
+SK=$(python3 "$SCRIPT_DIR/create_key.py" "$B/api/v1/api-keys" "$AK")
 curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@bridge.test"}' >/dev/null
-echo "SK=$SK"
+[[ -n "$SK" ]] || fail "no send key"
 pass "seeded"
 
 # ═══ 3. Hermes ═══
