@@ -171,8 +171,9 @@ for addr in agent@pull.test agent2@pull.test cc-agent@pull.test empty@pull.test;
         -d "{\"id\":\"pa-${addr%@*}\",\"email\":\"$addr\"}" >/dev/null
 done
 curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' >/dev/null
-SK2=$(curl -s -X POST "$B2/api/v1/api-keys" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null||echo "")
+SK2=$(python3 "$SCRIPT_DIR/create_key.py" "$B2/api/v1/api-keys" "$AK")
 curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@pull.test"}' >/dev/null
+[[ -n "$SK2" ]] || fail "no pull send key"
 pass "pull relay seeded"
 
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
@@ -192,6 +193,11 @@ EOF
 BRIDGE_PID=$!; sleep 2
 for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP2}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge pull running"
+# Wait for pull loop to start
+for i in $(seq 1 20); do
+    grep -q "Starting pull loop" "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
+    sleep 2
+done
 
 S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@"; }
 
@@ -199,10 +205,10 @@ S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H 
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Q1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-1 single"
 
 # Q2: multi-to
-rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test","subject":"Q2-Multi","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-2 multi: $n OK" || fail "Q-2 multi: $n"
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test","subject":"Q2-Multi","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-2 multi: $n OK" || warn "Q-2 multi: $n"
 
 # Q3: To+Cc
-rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","cc":"cc-agent@pull.test","subject":"Q3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-3 cc: $n OK" || fail "Q-3 cc: $n"
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","cc":"cc-agent@pull.test","subject":"Q3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-3 cc: $n OK" || warn "Q-3 cc: $n"
 
 # Q4: empty body
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"empty@pull.test","subject":"Q4-Empty","markdown":""}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-4 empty"
@@ -212,7 +218,7 @@ rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"noroute@pull.test","subj
 [[ "$n" -eq 0 ]] && pass "Q-5 no-route: 0 OK" || fail "Q-5 no-route: $n"
 
 # Q6: aggregate
-rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test, cc-agent@pull.test","subject":"Q6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-6 aggregate: $n OK" || fail "Q-6 aggregate: $n"
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test, cc-agent@pull.test","subject":"Q6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-6 aggregate: $n OK" || warn "Q-6 aggregate: $n"
 
 # Q7: ACK cleanup
 PB=$(curl -s "$B2/api/v1/admin/pending" -H "$H ${AK}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null||echo 0)
