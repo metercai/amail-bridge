@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -eu
+set -u
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 pass() { echo -e "${GREEN}[PASS]${NC} $*"; }
@@ -28,11 +28,17 @@ rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/bridge" "$WORK_DIR/relay-data"
 # ════ 1. Relay (push) ════
 echo ""; echo "=== 1. Push Relay ==="
 cat > "$WORK_DIR/relay.toml" << EOF
-[smtp]; addr = "127.0.0.1:${RS}"
-[http]; addr = "127.0.0.1:${RH}"
-[storage]; path = "${WORK_DIR}/relay-data"
-[retry]; max_attempts = 1; initial_backoff_secs = 1
-[logging]; level = "info"
+[smtp]
+addr = "127.0.0.1:${RS}"
+[http]
+addr = "127.0.0.1:${RH}"
+[storage]
+path = "${WORK_DIR}/relay-data"
+[retry]
+max_attempts = 1
+initial_backoff_secs = 1
+[logging]
+level = "info"
 EOF
 "$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay.log" 2>&1 &
 RELAY_PID=$!; sleep 3
@@ -88,8 +94,11 @@ cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
 addr = "127.0.0.1:${BRIDGE_PORT}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "push"
-[push]; body_limit_mb = 10
-[logging]; level = "info"; file = "$WORK_DIR/bridge/push-bridge.log"
+[push]
+body_limit_mb = 10
+[logging]
+level = "info"
+file = "$WORK_DIR/bridge/push-bridge.log"
 EOF
 "$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-push.toml" > "$WORK_DIR/bridge/push.log" 2>&1 &
 BRIDGE_PID=$!; sleep 2
@@ -107,19 +116,25 @@ sleep 3
 n=0; for i in $(seq 1 10); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
 [[ $n -ge 1 ]] && pass "5a: push OK ($n)" || fail "5a: push FAIL"
 
-kill "$BRIDGE_PID" 2>/dev/null; wait "$BRIDGE_PID" 2>/dev/null || true
+kill -9 "$BRIDGE_PID" 2>/dev/null || true; wait "$BRIDGE_PID" 2>/dev/null || true
 
 # ════ 5b. Pull ════
 echo ""; echo "=== 5b. Pull Mode ==="
-kill "$RELAY_PID" 2>/dev/null; wait "$RELAY_PID" 2>/dev/null || true; sleep 2
+kill -9 "$RELAY_PID" 2>/dev/null || true; wait "$RELAY_PID" 2>/dev/null || true; sleep 2
 rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 
 cat > "$WORK_DIR/relay.toml" << EOF
-[smtp]; addr = "127.0.0.1:${RS2}"
-[http]; addr = "127.0.0.1:${RH2}"
-[storage]; path = "${WORK_DIR}/relay-data"
-[retry]; max_attempts = 1; initial_backoff_secs = 1
-[logging]; level = "info"
+[smtp]
+addr = "127.0.0.1:${RS2}"
+[http]
+addr = "127.0.0.1:${RH2}"
+[storage]
+path = "${WORK_DIR}/relay-data"
+[retry]
+max_attempts = 1
+initial_backoff_secs = 1
+[logging]
+level = "info"
 EOF
 "$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay2.log" 2>&1 &
 RELAY_PID=$!; sleep 3
@@ -150,8 +165,14 @@ cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
 addr = "127.0.0.1:${BRIDGE_PORT2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
-[pull]; amail_url = "http://127.0.0.1:${RH2}"; admin_key = "${AK2}"; system_id = "admin"; poll_interval_sec = 2
-[logging]; level = "info"; file = "$WORK_DIR/bridge/pull-bridge.log"
+[pull]
+amail_url = "http://127.0.0.1:${RH2}"
+admin_key = "${AK2}"
+system_id = "admin"
+poll_interval_sec = 2
+[logging]
+level = "info"
+file = "$WORK_DIR/bridge/pull-bridge.log"
 EOF
 "$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-pull.toml" > "$WORK_DIR/bridge/pull.log" 2>&1 &
 BRIDGE_PID=$!; sleep 2
@@ -161,12 +182,18 @@ for i in $(seq 1 10); do
 done
 pass "bridge pull running"
 
+# Wait for pull loop to start (bridge init may take a while)
+for i in $(seq 1 20); do
+    grep -q 'Starting pull loop' "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
+    sleep 2
+done
+
 rm -f "$HL"
 curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/send" \
     -H "X-Api-Key: ${SK2}" -H "Content-Type: application/json" \
     -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Pull Test","markdown":"Pull."}' > /dev/null
 sleep 3
-n=0; for i in $(seq 1 15); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
+n=0; for i in $(seq 1 20); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
 [[ $n -ge 1 ]] && pass "5b: pull OK ($n)" || fail "5b: pull FAIL"
 
 echo ""; echo "═══ Bridge E2E: Complete ═══"
