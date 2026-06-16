@@ -96,10 +96,7 @@ pub async fn start_pull_loop(
                     // Parse headers from relay payload
                     let headers: HashMap<String, String> = match serde_json::from_value(d.headers.clone()) {
                         Ok(h) => h,
-                        Err(e) => {
-                            tracing::warn!(id = d.id, error = %e, "Invalid headers JSON — skipping, will retry next poll");
-                            continue;
-                        }
+                        Err(_) => HashMap::new(),  // null or invalid → treat as empty
                     };
 
                     // Forward to gateway (shared body from batch)

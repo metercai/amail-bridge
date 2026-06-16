@@ -298,18 +298,17 @@ async fn async_main(
 
     let sock_addr: std::net::SocketAddr = config.addr.parse()?;
 
-    if config.mode == "push" && config.has_tls() {
+    if config.mode == "pull" {
+        let srv_task = start_http(app, sock_addr, shutdown.clone());
+        let pull_task = pull::start_pull_loop(config, router, shutdown);
+        tokio::try_join!(srv_task, pull_task)?;
+    } else if config.mode == "push" && config.has_tls() {
         // Push mode with TLS — start HTTPS server (uses config for TLS config)
         let tls_config = config.clone();
         push::start_push_tls(tls_config, app, sock_addr, shutdown.clone()).await?;
     } else {
         // HTTP server (all modes)
         start_http(app, sock_addr, shutdown.clone()).await?;
-    }
-
-    // Pull loop runs alongside the HTTP server
-    if config.mode == "pull" {
-        pull::start_pull_loop(config, router, shutdown).await?;
     }
 
     Ok(())
