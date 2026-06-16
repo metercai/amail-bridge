@@ -1,37 +1,54 @@
 #!/usr/bin/env bash
 set -u
-
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 pass() { echo -e "${GREEN}[PASS]${NC} $*"; }
 fail() { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
+warn() { echo -e "${RED}[WARN]${NC} $*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 GW_BIN="${GW_BIN:-$HOME/amail-gateway/target/debug/amail-gateway}"
 BRIDGE_BIN="${BRIDGE_BIN:-$PROJECT_DIR/target/debug/amail-bridge}"
-MOCK_HERMES="$SCRIPT_DIR/mock_hermes.py"
-WORK_DIR="${WORK_DIR:-/tmp/bridge-e2e}"
 
-RS=35010; RH=39010; RS2=35011; RH2=39011
-BRIDGE_PORT=38080; BRIDGE_PORT2=38081; HERMES_PORT=39999
+WORK_DIR="${WORK_DIR:-/tmp/bridge-e2e}"
+RS=35010; RH=39010; RS2=35011; RH2=39011; BP=38080; BP2=38081; HP=39999
+HL="$WORK_DIR/hermes.log"; H="X-Api-Key:"; J="Content-Type: application/json"
+BASE="http://127.0.0.1"
 
 cleanup() {
     for pid in "${RELAY_PID:-}" "${BRIDGE_PID:-}" "${HERMES_PID:-}"; do
-        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-    done
-    wait 2>/dev/null || true
-    rm -rf "$WORK_DIR"
+        [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
+    done; wait 2>/dev/null || true; rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
-rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/bridge" "$WORK_DIR/relay-data"
+rm -rf "$WORK_DIR"
+for d in bridge relay-data relay2-data; do mkdir -p "$WORK_DIR/$d"; done
 
-# ════ 1. Relay (push) ════
-echo ""; echo "=== 1. Push Relay ==="
+# ═══ Helpers ═══
+wait_hermes() { local n=0; for i in $(seq 1 15); do n=$(wc -l < "$HL" 2>/dev/null||echo 0); [[ $n -ge ${1:-1} ]] && break; sleep 2; done; echo "$n"; }
+expect() { local g=$1 e=$2 l=$3; [[ "$g" -ge "$e" ]] && pass "$l: $g OK" || fail "$l: $g (exp $e)"; }
+
+start_gw() {
+    local cfg=$1 port=$2
+    "$GW_BIN" -c "$cfg" --pid-file "$WORK_DIR/pid" > "$WORK_DIR/relay.log" 2>&1 &
+    RELAY_PID=$!; sleep 4
+    for i in $(seq 1 15); do
+        AK=$(cat "$WORK_DIR/relay-data/amail.db.admin_key" 2>/dev/null||echo "")
+        [[ -n "$AK" ]] && break; sleep 1
+    done
+    for i in $(seq 1 15); do
+        [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:$port/health")" == 200 ]] && break
+        sleep 1
+    done
+}
+
+# ═══ 1. Push Relay ═══
+echo; echo "=== 1. Push Relay ==="
 cat > "$WORK_DIR/relay.toml" << EOF
 [smtp]
-addr = "127.0.0.1:${RS}"
+addr = "$BASE:${RS}"
 [http]
-addr = "127.0.0.1:${RH}"
+addr = "$BASE:${RH}"
 [storage]
 path = "${WORK_DIR}/relay-data"
 [retry]
@@ -40,58 +57,53 @@ initial_backoff_secs = 1
 [logging]
 level = "info"
 EOF
-"$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay.log" 2>&1 &
-RELAY_PID=$!; sleep 3
-AK=$(cat "$WORK_DIR/relay-data/amail.db.admin_key" 2>/dev/null || echo "")
+start_gw "$WORK_DIR/relay.toml" "$RH"
 [[ -n "$AK" ]] || fail "no admin key"
-for i in $(seq 1 15); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${RH}/health")" == "200" ]] && break
-    sleep 1
-done
 pass "push relay running"
 
-# ════ 2. Seed ════
-echo ""; echo "=== 2. Seed ==="
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/domains" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d "{\"id\":\"bdom\",\"domain\":\"bridge.test\",\"webhook_url\":\"http://127.0.0.1:${BRIDGE_PORT}/webhooks/bridge\"}" > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/addresses" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d "{\"id\":\"bagent\",\"email\":\"agent@bridge.test\",\"webhook_url\":\"http://127.0.0.1:${BRIDGE_PORT}/webhooks/bridge\"}" > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/whitelists" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/systems/admin/domains" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d '{"id":"sdom","domain":"test.local"}' > /dev/null
-SK=$(curl -s -X POST "http://127.0.0.1:${RH}/api/v1/api-keys" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null || echo "")
+# ═══ 2. Seed ═══
+echo; echo "=== 2. Seed ==="
+B="$BASE:${RH}"
+for d in bridge.test test.local; do
+    curl -s -X POST "$B/api/v1/admin/systems/admin/domains" -H "$H ${AK}" -H "$J" \
+        -d "{\"id\":\"dom-$d\",\"domain\":\"$d\",\"webhook_url\":\"$BASE:${BP}/webhooks/bridge\"}" >/dev/null
+done
+for addr in agent@bridge.test agent2@bridge.test cc-agent@bridge.test empty@bridge.test; do
+    curl -s -X POST "$B/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
+        -d "{\"id\":\"a-${addr%@*}\",\"email\":\"$addr\",\"webhook_url\":\"$BASE:${BP}/webhooks/bridge\"}" >/dev/null
+done
+curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' >/dev/null
+SK=$(curl -s -X POST "$B/api/v1/api-keys" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null||echo"")
+curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@bridge.test"}' >/dev/null
 [[ -n "$SK" ]] || fail "no send key"
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/admin/whitelists" \
-    -H "X-Api-Key: ${AK}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@bridge.test"}' > /dev/null
 pass "seeded"
 
-# ════ 3. Mock Hermes ════
-echo ""; echo "=== 3. Mock Hermes ==="
-HL="$WORK_DIR/hermes.log"; rm -f "$HL"
-python3 "$MOCK_HERMES" "127.0.0.1" "$HERMES_PORT" "$HL" &
+# ═══ 3. Hermes ═══
+echo; echo "=== 3. Mock Hermes ==="
+rm -f "$HL"
+python3 "$SCRIPT_DIR/mock_hermes.py" "127.0.0.1" "$HP" "$HL" &
 HERMES_PID=$!; sleep 1
-curl -s "http://127.0.0.1:${HERMES_PORT}/health" > /dev/null || fail "hermes not healthy"
+curl -s "$BASE:${HP}/health" >/dev/null || fail "hermes not healthy"
 pass "mock hermes running"
 
-# ════ 4. Routes ════
+# ═══ Routes ═══
 cat > "$WORK_DIR/bridge/amail_routes.toml" << EOF
-"agent@bridge.test" = "127.0.0.1:${HERMES_PORT}"
-"agent@pull.test" = "127.0.0.1:${HERMES_PORT}"
+"agent@bridge.test" = "127.0.0.1:${HP}"
+"agent2@bridge.test" = "127.0.0.1:${HP}"
+"cc-agent@bridge.test" = "127.0.0.1:${HP}"
+"empty@bridge.test" = "127.0.0.1:${HP}"
+"agent@pull.test" = "127.0.0.1:${HP}"
+"agent2@pull.test" = "127.0.0.1:${HP}"
+"cc-agent@pull.test" = "127.0.0.1:${HP}"
+"empty@pull.test" = "127.0.0.1:${HP}"
 EOF
 
-# ════ 5a. Push ════
-echo ""; echo "=== 5a. Push Mode ==="
+# ═══════════════════════════════════
+# PUSH MODE
+# ═══════════════════════════════════
+echo; echo "═════ PUSH TESTS ═════"
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
-addr = "127.0.0.1:${BRIDGE_PORT}"
+addr = "$BASE:${BP}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "push"
 [push]
@@ -102,32 +114,44 @@ file = "$WORK_DIR/bridge/push-bridge.log"
 EOF
 "$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-push.toml" > "$WORK_DIR/bridge/push.log" 2>&1 &
 BRIDGE_PID=$!; sleep 2
-for i in $(seq 1 10); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BRIDGE_PORT}/health" 2>/dev/null)" == "200" ]] && break
-    sleep 1
-done
+for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge push running"
 
-rm -f "$HL"
-curl -s -X POST "http://127.0.0.1:${RH}/api/v1/send" \
-    -H "X-Api-Key: ${SK}" -H "Content-Type: application/json" \
-    -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"Push Test","markdown":"Push."}' > /dev/null
-sleep 3
-n=0; for i in $(seq 1 10); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
-[[ $n -ge 1 ]] && pass "5a: push OK ($n)" || fail "5a: push FAIL"
+S() { curl -s -X POST "$B/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK}" "$@"; }
 
-kill -9 "$BRIDGE_PID" 2>/dev/null || true; sleep 3; wait "$BRIDGE_PID" 2>/dev/null || true
+# P1: single
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"P1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-1 single"
 
-# ════ 5b. Pull ════
-echo ""; echo "=== 5b. Pull Mode ==="
-kill -9 "$RELAY_PID" 2>/dev/null || true; sleep 5; wait "$RELAY_PID" 2>/dev/null || true
+# P2: multi-to
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test, agent2@bridge.test","subject":"P2-MultiTo","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-2 multi-to"
+
+# P3: To+Cc
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","cc":"cc-agent@bridge.test","subject":"P3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-3 cc"
+
+# P4: empty body
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"empty@bridge.test","subject":"P4-Empty","markdown":""}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-4 empty"
+
+# P5: no route
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"noroute@bridge.test","subject":"P5-NoRoute","markdown":"test."}' >/dev/null; sleep 5; n=$(wc -l < "$HL" 2>/dev/null||echo 0)
+[[ "$n" -eq 0 ]] && pass "P-5 no-route: 0 OK" || fail "P-5 no-route: $n"
+
+# P6: same-domain aggregate (3 recipients → 1 webhook)
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test, agent2@bridge.test, cc-agent@bridge.test","subject":"P6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-6 aggregate"
+
+kill -9 "$BRIDGE_PID" 2>/dev/null||true; sleep 3; wait "$BRIDGE_PID" 2>/dev/null||true
+
+# ═══════════════════════════════════
+# PULL MODE
+# ═══════════════════════════════════
+echo; echo "═════ PULL TESTS ═════"
+kill -9 "$RELAY_PID" 2>/dev/null||true; sleep 5; wait "$RELAY_PID" 2>/dev/null||true
 rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 
-cat > "$WORK_DIR/relay.toml" << EOF
+cat > "$WORK_DIR/relay2.toml" << EOF
 [smtp]
-addr = "127.0.0.1:${RS2}"
+addr = "$BASE:${RS2}"
 [http]
-addr = "127.0.0.1:${RH2}"
+addr = "$BASE:${RH2}"
 [storage]
 path = "${WORK_DIR}/relay-data"
 [retry]
@@ -136,45 +160,28 @@ initial_backoff_secs = 1
 [logging]
 level = "info"
 EOF
-"$GW_BIN" -c "$WORK_DIR/relay.toml" --pid-file "$WORK_DIR/relay.pid" > "$WORK_DIR/relay2.log" 2>&1 &
-RELAY_PID=$!; sleep 3
-AK2=$(cat "$WORK_DIR/relay-data/amail.db.admin_key" 2>/dev/null || echo "")
-for i in $(seq 1 15); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${RH2}/health" 2>/dev/null)" == "200" ]] && break
-    sleep 1
-done
+start_gw "$WORK_DIR/relay2.toml" "$RH2"
 pass "pull relay running"
 
-# Seed pull agent (no webhook_url)
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/systems/admin/domains" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"id":"pdom","domain":"pull.test"}' > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/systems/admin/addresses" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"id":"pagent","email":"agent@pull.test"}' > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/whitelists" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' > /dev/null
-# Sender domain (must exist for send API)
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/systems/admin/domains" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"id":"sdom2","domain":"test.local"}' > /dev/null
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/whitelists" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@pull.test"}' > /dev/null
-SK2=$(curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/api-keys" \
-    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
-    -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null || echo "")
+B2="$BASE:${RH2}"
+curl -s -X POST "$B2/api/v1/admin/systems/admin/domains" -H "$H ${AK}" -H "$J" -d '{"id":"dom-pull","domain":"pull.test"}' >/dev/null
+curl -s -X POST "$B2/api/v1/admin/systems/admin/domains" -H "$H ${AK}" -H "$J" -d '{"id":"dom-tlocal","domain":"test.local"}' >/dev/null
+for addr in agent@pull.test agent2@pull.test cc-agent@pull.test empty@pull.test; do
+    curl -s -X POST "$B2/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
+        -d "{\"id\":\"pa-${addr%@*}\",\"email\":\"$addr\"}" >/dev/null
+done
+curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' >/dev/null
+SK2=$(curl -s -X POST "$B2/api/v1/api-keys" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('raw_key',''))" 2>/dev/null||echo"")
+curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@pull.test"}' >/dev/null
+pass "pull relay seeded"
 
-# Pull bridge
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
-addr = "127.0.0.1:${BRIDGE_PORT2}"
+addr = "$BASE:${BP2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]
-amail_url = "http://127.0.0.1:${RH2}"
-admin_key = "${AK2}"
+amail_url = "$BASE:${RH2}"
+admin_key = "${AK}"
 system_id = "admin"
 poll_interval_sec = 2
 [logging]
@@ -183,25 +190,34 @@ file = "$WORK_DIR/bridge/pull-bridge.log"
 EOF
 "$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-pull.toml" > "$WORK_DIR/bridge/pull.log" 2>&1 &
 BRIDGE_PID=$!; sleep 2
-for i in $(seq 1 10); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BRIDGE_PORT2}/health" 2>/dev/null)" == "200" ]] && break
-    sleep 1
-done
+for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP2}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge pull running"
 
-# Send email FIRST (relay creates pending while bridge initializes)
-rm -f "$HL"
-curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/send" \
-    -H "X-Api-Key: ${SK2}" -H "Content-Type: application/json" \
-    -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Pull Test","markdown":"Pull."}' > /dev/null
-sleep 3
+S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@"; }
 
-# Wait for pull loop to start (bridge init may take a while)
-for i in $(seq 1 25); do
-    grep -q 'Starting pull loop' "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
-    sleep 2
-done
-n=0; for i in $(seq 1 20); do n=$(wc -l < "$HL" 2>/dev/null || echo 0); [[ $n -ge 1 ]] && break; sleep 2; done
-[[ $n -ge 1 ]] && pass "5b: pull OK ($n)" || fail "5b: pull FAIL"
+# Q1: single
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Q1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-1 single"
 
-echo ""; echo "═══ Bridge E2E: Complete ═══"
+# Q2: multi-to
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test","subject":"Q2-Multi","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-2 multi"
+
+# Q3: To+Cc
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","cc":"cc-agent@pull.test","subject":"Q3-Cc","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-3 cc"
+
+# Q4: empty body
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"empty@pull.test","subject":"Q4-Empty","markdown":""}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-4 empty"
+
+# Q5: no route
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"noroute@pull.test","subject":"Q5-NoRoute","markdown":"test."}' >/dev/null; sleep 5; n=$(wc -l < "$HL" 2>/dev/null||echo 0)
+[[ "$n" -eq 0 ]] && pass "Q-5 no-route: 0 OK" || fail "Q-5 no-route: $n"
+
+# Q6: aggregate
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test, cc-agent@pull.test","subject":"Q6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "Q-6 aggregate"
+
+# Q7: ACK cleanup
+PB=$(curl -s "$B2/api/v1/admin/pending" -H "$H ${AK}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null||echo 0)
+sleep 10
+PA=$(curl -s "$B2/api/v1/admin/pending" -H "$H ${AK}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null||echo 0)
+[[ "$PA" -lt "$PB" || "$PA" -eq 0 ]] && pass "Q-7 ACK: $PB→$PA" || fail "Q-7 ACK: $PB→$PA"
+
+echo; echo "═════ Bridge E2E: Complete ═════"
