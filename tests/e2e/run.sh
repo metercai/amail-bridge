@@ -155,6 +155,13 @@ curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/systems/admin/addresses" \
 curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/whitelists" \
     -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
     -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' > /dev/null
+# Sender domain (must exist for send API)
+curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/systems/admin/domains" \
+    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
+    -d '{"id":"sdom2","domain":"test.local"}' > /dev/null
+curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/admin/whitelists" \
+    -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
+    -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@pull.test"}' > /dev/null
 SK2=$(curl -s -X POST "http://127.0.0.1:${RH2}/api/v1/api-keys" \
     -H "X-Api-Key: ${AK2}" -H "Content-Type: application/json" \
     -d '{"system_id":"admin","email_address":"sender@test.local","scopes":["send","agent"],"category":"agent"}' \
