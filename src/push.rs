@@ -258,87 +258,50 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── Multi-recipient: signatures array in payload, no x-batch header ──
-    // Fast pre-check: only parse JSON if the body starts like a signatures payload
-    if body.starts_with(b"{\"signatures\":") {
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
-                return handle_batch_webhook(axum::extract::State(state), body).await;
-            }
+    // ── Multi-recipient: signatures array in payload ──────────────
+    // Parse JSON once and check for the "signatures" key
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
+        if v.get("signatures").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+            return handle_batch_webhook(axum::extract::State(state), body).await;
         }
     }
 
     // ── Single mode (X-Amail-Email header) ───────────────────────
-    // Extract all recipient emails from the webhook body and forward to each
-    let emails: Vec<String> = {
-        let header_email = headers
-            .get("x-amail-email")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        // Parse body for "to" + "cc" recipients
-        let mut all = Vec::new();
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
-            if let Some(arr) = v.get("to").and_then(|t| t.as_array()) {
-                for e in arr { if let Some(s) = e.as_str() { all.push(s.to_string()); } }
-            }
-            if let Some(arr) = v.get("cc").and_then(|t| t.as_array()) {
-                for e in arr { if let Some(s) = e.as_str() { all.push(s.to_string()); } }
-            }
-        }
-        // Fallback to x-amail-email header only if body parsing yields nothing
-        if all.is_empty() {
-            match header_email {
-                Some(e) => vec![e],
-                None => {
-                    return (StatusCode::BAD_REQUEST, "Missing X-Amail-Email header and no recipients in body")
-                        .into_response();
-                }
-            }
-        } else {
-            all
+    let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
+        Some(e) => e.to_string(),
+        None => {
+            return (StatusCode::BAD_REQUEST, "Missing X-Amail-Email header").into_response();
         }
     };
 
-    let mut delivered = 0usize;
-    let mut last_status = StatusCode::OK;
-
-    for email in &emails {
-        let route = match state.router.lookup(email) {
-            Some(r) => r,
-            None => {
-                tracing::warn!(email = %email, "No route found");
-                continue;
-            }
-        };
-        let target = route.target_url();
-        tracing::info!(email = %email, host = %route.host, port = route.port, target = %target, "Webhook relayed");
-
-        let mut fwd_headers = HeaderMap::new();
-        for name in &state.forward_headers {
-            if let Some(val) = headers.get(name.as_str()) {
-                fwd_headers.insert(name.clone(), val.clone());
-            }
+    let route = match state.router.lookup(&email) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(email = %email, "No route found");
+            return (StatusCode::BAD_GATEWAY, format!("No route for {}", email)).into_response();
         }
+    };
 
-        match state.http_client.post(target).headers(fwd_headers).body(body.clone()).send().await {
-            Ok(resp) => {
-                last_status = resp.status();
-                tracing::info!(email = %email, status = %last_status, "Webhook forwarded");
-                if last_status.is_success() { delivered += 1; }
-            }
-            Err(e) => {
-                tracing::error!(email = %email, error = %e, "Forward failed");
-            }
+    let target = route.target_url();
+    tracing::info!(email = %email, host = %route.host, port = route.port, target = %target, "Webhook relayed");
+
+    let mut fwd_headers = HeaderMap::new();
+    for name in &state.forward_headers {
+        if let Some(val) = headers.get(name.as_str()) {
+            fwd_headers.insert(name.clone(), val.clone());
         }
     }
 
-    if delivered == emails.len() {
-        (StatusCode::OK, format!("{}/{} delivered", delivered, emails.len())).into_response()
-    } else if delivered > 0 {
-        (StatusCode::MULTI_STATUS, format!("{}/{} delivered", delivered, emails.len())).into_response()
-    } else {
-        (last_status, format!("{}/{} delivered", delivered, emails.len())).into_response()
+    match state.http_client.post(target).headers(fwd_headers).body(body).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            tracing::info!(email = %email, status = %status, "Webhook forwarded");
+            (status, resp.bytes().await.unwrap_or_default()).into_response()
+        }
+        Err(e) => {
+            tracing::error!(email = %email, error = %e, "Forward failed");
+            (StatusCode::BAD_GATEWAY, format!("Forward failed: {}", e)).into_response()
+        }
     }
 }
 
