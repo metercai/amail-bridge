@@ -305,86 +305,33 @@ async fn handle_webhook(
     }
 }
 
-/// Start the push-mode HTTP server.
-/// Start the push-mode HTTPS server with TLS (ACME or static certs).
-/// The app parameter is the fully assembled Router (admin + push routes).
-pub async fn start_push_tls(
-    config: BridgeConfig,
+/// Start the push-mode HTTP server (plain, no TLS).
+pub async fn start_push_server(
     app: axum::Router,
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Print bridge URL hint
-    let hostname = config.hostname.as_deref().unwrap_or("");
-    let bridge_url = format!(
-        "https://{}/webhooks/amail-inbound",
-        hostname
-    );
-    tracing::info!("======================================================");
-    tracing::info!("  amail-bridge (push mode) running on {}", addr);
-    tracing::info!("  Hostname: {} ({})", hostname, if config.has_tls() { "TLS" } else { "plain" });
-    tracing::info!("  Add this to ~/.hermes/amail_relay.json:");
-    tracing::info!("    \"bridge_url\": \"{}\"", bridge_url);
-    tracing::info!("======================================================");
+    tracing::info!("amail-bridge (push mode) running on {}", addr);
 
-    if config.has_tls() {
-        // Determine TLS cert source: static files > ACME > HTTP fallback
-        let mut acme_stop: Option<Arc<AtomicBool>> = None;
-
-        let (cert_path, key_path) = if config.tls_cert.is_some() && config.tls_key.is_some() {
-            (config.tls_cert.clone().unwrap(), config.tls_key.clone().unwrap())
-        } else if let Some(ref hostname) = config.hostname {
-            let cache = config.acme_cache.clone()
-                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".acme_cache"));
-            tracing::info!(%hostname, cache = %cache.display(), "Attempting ACME certificate...");
-            match crate::acme::get_or_acquire_cert(hostname, &cache, None).await {
-                Ok((paths, stop)) => {
-                    tracing::info!("ACME succeeded — using auto-cert");
-                    acme_stop = Some(stop);
-                    (paths.cert, paths.key)
-                }
-                Err(e) => {
-                    tracing::warn!(%hostname, error = %e,
-                        "ACME certificate acquisition failed — falling back to HTTP");
-                    return start_push_http(shutdown, app, addr).await;
-                }
+    let shutdown_signal = async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if shutdown.load(Ordering::SeqCst) {
+                tracing::info!("Push server shutting down");
+                break;
             }
-        } else {
-            tracing::error!("has_tls() returned true but hostname is None — falling back to HTTP");
-            return start_push_http(shutdown, app, addr).await;
-        };
-
-        let tls_config = build_tls_config_from_paths(&cert_path, &key_path)?;
-        let handle = axum_server::Handle::new();
-        let shutdown_handle = handle.clone();
-        let shutdown_tls = shutdown.clone();
-        tokio::spawn(async move {
-            loop {
-                if shutdown_tls.load(Ordering::SeqCst) {
-                    tracing::info!("Push TLS server shutting down gracefully");
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
-        });
-        axum_server::bind_rustls(addr, tls_config)
-            .handle(handle)
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-            .await?;
-
-        // Signal ACME renew thread to stop
-        if let Some(stop) = acme_stop {
-            stop.store(true, Ordering::SeqCst);
-            // Give the ACME renew thread a moment to notice the stop flag
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            tracing::info!("ACME renew thread signalled to stop");
         }
+    };
 
-        return Ok(());
-    }
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal)
+    .await?;
 
-    start_push_http(shutdown, app, addr).await
+    Ok(())
 }
 
 async fn start_push_http(

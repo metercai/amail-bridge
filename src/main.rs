@@ -14,7 +14,6 @@
 //! the log file (default: ~/.hermes/amail-bridge.log), and writes a PID file
 //! (default: ~/.hermes/amail-bridge.pid).
 
-mod acme;
 mod config;
 mod pull;
 mod push;
@@ -302,12 +301,8 @@ async fn async_main(
         let srv_task = start_http(app, sock_addr, shutdown.clone());
         let pull_task = pull::start_pull_loop(config, router, shutdown);
         tokio::try_join!(srv_task, pull_task)?;
-    } else if config.mode == "push" && config.has_tls() {
-        // Push mode with TLS — start HTTPS server (uses config for TLS config)
-        let tls_config = config.clone();
-        push::start_push_tls(tls_config, app, sock_addr, shutdown.clone()).await?;
     } else {
-        // HTTP server (all modes)
+        // Plain HTTP server
         start_http(app, sock_addr, shutdown.clone()).await?;
     }
 
