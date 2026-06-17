@@ -150,7 +150,8 @@ async fn create_route(
     tracing::info!(email = %body.email, host = %body.host, port = body.port, "Route created via API");
 
     let webhook_url = if state.config.mode == "push" {
-        format!("http://{}/webhooks/amail-inbound", state.config.addr)
+        let host = state.config.hostname.as_deref().unwrap_or(&state.config.addr);
+        format!("http://{}/webhooks/amail-inbound", host)
     } else {
         String::new()
     };
