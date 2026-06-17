@@ -1,4 +1,4 @@
-# amail-bridge configuration
+# amail-bridge configuration (internal network only — no TLS)
 #
 # Copy this file to amail_bridge.toml and edit to match your setup.
 
@@ -6,10 +6,10 @@ addr = "0.0.0.0:38080"           # Listen address for admin API + push webhooks
 admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 # mode = "push"  # "push" or "pull" (default: "push")
 
-# Logging 
+# Logging
 # [logging]
 # level = "info"                    # log level (default: "info")
-file = "/var/log/amail-bridge.log"  # log file path (default: /var/log/amail-bridge.log)
+# file = "/var/log/amail-bridge.log"  # log file path (default: /var/log/amail-bridge.log)
 
 # ── Pull mode (bridge polls gateway outbound) ───────────────────────
 [pull]
@@ -27,13 +27,7 @@ poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 # forward_headers = ["x-amail-email", "x-webhook-signature", "x-mailrelay-timestamp", "content-type"]
 
 # ── Push mode (bridge receives external POSTs) ────────────────────
-# Uncomment to enable. hostname enables TLS.
-#
 # [push]
-# hostname = "bridge.example.com"           # enables TLS (ACME auto-cert if no tls_cert/tls_key)
-# tls_cert = "/etc/ssl/bridge.crt"          # static TLS cert path
-# tls_key  = "/etc/ssl/bridge.key"          # static TLS key path
-# acme_cache = "~/.acme_cache"              # ACME cache dir (default: ~/.acme_cache)
 # blacklist_ips = ["1.2.3.4", "10.0.0.0/8"] # permanently blocked IPs/CIDRs (default: [])
 # allowed_ips = ["10.0.0.0/8", "192.168.1.1"] # IP allowlist, empty = allow all (default: [])
 # rate_limit = 30                            # req/sec per source IP, 0 = disabled (default: 30)
@@ -51,4 +45,3 @@ poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 # [[push.sites]]
 # domain = "old.example.com"
 # redirect = "https://www.example.com"       # 308 redirect URL
-
