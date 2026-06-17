@@ -46,9 +46,9 @@ start_gw() {
 echo; echo "=== 1. Push Relay ==="
 cat > "$WORK_DIR/relay.toml" << EOF
 [smtp]
-addr = "127.0.0.1:${RS}"
+bind = "127.0.0.1:${RS}"
 [http]
-addr = "127.0.0.1:${RH}"
+bind = "127.0.0.1:${RH}"
 [storage]
 path = "${WORK_DIR}/relay-data"
 [retry]
@@ -103,7 +103,7 @@ EOF
 # ═══════════════════════════════════
 echo; echo "═════ PUSH TESTS ═════"
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
-addr = "127.0.0.1:${BP}"
+bind = "127.0.0.1:${BP}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "push"
 [push]
@@ -150,9 +150,9 @@ rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 
 cat > "$WORK_DIR/relay2.toml" << EOF
 [smtp]
-addr = "127.0.0.1:${RS2}"
+bind = "127.0.0.1:${RS2}"
 [http]
-addr = "127.0.0.1:${RH2}"
+bind = "127.0.0.1:${RH2}"
 [storage]
 path = "${WORK_DIR}/relay-data"
 [retry]
@@ -178,7 +178,7 @@ curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system
 pass "pull relay seeded"
 
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
-addr = "127.0.0.1:${BP2}"
+bind = "127.0.0.1:${BP2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]

@@ -1,11 +1,13 @@
-# amail-bridge configuration (internal network only — no TLS)
+# amail-bridge configuration 
 #
 # Copy this file to amail_bridge.toml and edit to match your setup.
 # hostname = "bridge.internal"         # public address (defaults to addr)
 
-addr = "0.0.0.0:38080"           # Listen address for admin API + push webhooks
-admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 # mode = "push"  # "push" or "pull" (default: "push")
+
+bind = "0.0.0.0:38080"           # Listen address for admin API + push webhooks
+# hostname = "bridge.internal"         # public address (defaults to addr)
+admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 
 # Logging
 # [logging]
@@ -13,11 +15,11 @@ admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 # file = "/var/log/amail-bridge.log"  # log file path (default: /var/log/amail-bridge.log)
 
 # ── Pull mode (bridge polls gateway outbound) ───────────────────────
-[pull]
-amail_url = "http://192.168.1.1:38080"  # Gateway HTTP API URL
-admin_key = "sk-..."                    # System admin API key from gateway
-system_id = "admin"                     # System ID for pending-query (default: "admin")
-poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
+# [pull]
+# amail_url = "http://192.168.1.1:38080"  # Gateway HTTP API URL
+# admin_key = "sk-..."                    # System admin API key from gateway
+# system_id = "admin"                     # System ID for pending-query (default: "admin")
+# poll_interval_sec = 10                  # Poll interval in seconds (default: 10)
 
 # ── Forward headers to gateway ──────────────────────────────────
 # Headers passed through to the gateway from gateway.
