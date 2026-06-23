@@ -102,6 +102,9 @@ pub async fn start_pull_loop(
                     // Forward to gateway (shared body from batch)
                     let mut req_builder = state.http_client.post(target);
                     for (k, v) in &headers {
+                        if k.eq_ignore_ascii_case("content-type") {
+                            continue;  // gateway includes it, bridge sets it below
+                        }
                         req_builder = req_builder.header(k.as_str(), v.as_str());
                     }
                     req_builder = req_builder
