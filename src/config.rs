@@ -170,9 +170,9 @@ fn default_body_limit() -> u32 { 20 }
 
 fn default_forward_headers() -> Vec<String> {
     vec![
-        "x-amail-email".into(),
-        "x-webhook-signature".into(),
-        "x-mailrelay-timestamp".into(),
+        "X-Amail-Email".into(),
+        "X-Webhook-Signature".into(),
+        "X-Mailrelay-Timestamp".into(),
         "content-type".into(),
     ]
 }

@@ -267,7 +267,7 @@ async fn handle_webhook(
     }
 
     // ── Single mode (X-Amail-Email header) ───────────────────────
-    let email = match headers.get("x-amail-email").and_then(|v| v.to_str().ok()) {
+    let email = match headers.get("X-Amail-Email").and_then(|v| v.to_str().ok()) {
         Some(e) => e.to_string(),
         None => {
             return (StatusCode::BAD_REQUEST, "Missing X-Amail-Email header").into_response();
@@ -367,9 +367,9 @@ fn batch_header_value(
     ts: &str,
 ) -> Option<(&'static str, String)> {
     match name {
-        "x-amail-email" => Some(("x-amail-email", email.to_string())),
-        "x-webhook-signature" => Some(("x-webhook-signature", sig.to_string())),
-        "x-mailrelay-timestamp" => Some(("x-mailrelay-timestamp", ts.to_string())),
+        "X-Amail-Email" => Some(("X-Amail-Email", email.to_string())),
+        "X-Webhook-Signature" => Some(("X-Webhook-Signature", sig.to_string())),
+        "X-Mailrelay-Timestamp" => Some(("X-Mailrelay-Timestamp", ts.to_string())),
         "content-type" => Some(("content-type", "application/json".to_string())),
         _ => None,
     }
