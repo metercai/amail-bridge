@@ -72,6 +72,10 @@ pub struct BridgeConfig {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Route health check configuration.
+    #[serde(default)]
+    pub health: HealthConfig,
 }
 
 impl BridgeConfig {
@@ -228,11 +232,38 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Route health check configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HealthConfig {
+    /// How often to probe each route target (seconds).
+    #[serde(default = "default_health_check_interval")]
+    pub check_interval_sec: u64,
+    /// Consecutive failures before removing routes to a dead target.
+    #[serde(default = "default_health_fail_threshold")]
+    pub fail_threshold: u32,
+    /// TCP connection timeout per probe (seconds).
+    #[serde(default = "default_health_connect_timeout")]
+    pub connect_timeout_sec: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_sec: 60,
+            fail_threshold: 3,
+            connect_timeout_sec: 3,
+        }
+    }
+}
+
 // Default helpers
 fn default_mode() -> String { "push".into() }
 fn default_listen_addr() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
 fn default_log_level() -> String { "info".into() }
+fn default_health_check_interval() -> u64 { 60 }
+fn default_health_fail_threshold() -> u32 { 3 }
+fn default_health_connect_timeout() -> u64 { 3 }
 
 impl Default for PullConfig {
     fn default() -> Self {

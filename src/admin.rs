@@ -126,7 +126,7 @@ async fn health(State(state): State<AdminState>) -> impl IntoResponse {
     Json(HealthResponse {
         status: "ok",
         uptime_secs: state.startup.elapsed().as_secs(),
-        version: env!("CARGO_PKG_VERSION"),
+        version: concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_COMMIT_HASH")),
     })
 }
 

@@ -58,6 +58,7 @@ pub async fn start_pull_loop(
         // Periodic cleanup of stale dedup entries
         seen.retain(|_, t| t.elapsed() < seen_ttl);
 
+        tracing::debug!("Pull poll cycle starting — fetching pending deliveries");
         let sleep_secs = match fetch_pending(&state).await {
             Ok(batches) => {
                 consecutive_failures = 0;

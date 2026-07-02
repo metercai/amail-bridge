@@ -21,6 +21,7 @@ mod router;
 mod vhost;
 mod security;
 mod admin;
+mod health;
 
 use std::path::PathBuf;
 use std::process;
@@ -298,6 +299,13 @@ async fn async_main(
     let sock_addr: std::net::SocketAddr = config.addr.parse()?;
 
     if config.mode == "pull" {
+        // Route health check runs as a background task
+        let health_router = router.clone();
+        let health_config = config.health.clone();
+        let health_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            health::start_route_health(health_router, health_config, health_shutdown).await;
+        });
         let srv_task = start_http(app, sock_addr, shutdown.clone());
         let pull_task = pull::start_pull_loop(config, router, shutdown);
         tokio::try_join!(srv_task, pull_task)?;
