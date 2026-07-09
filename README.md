@@ -49,22 +49,7 @@ sends a **single body copy** with per-recipient headers — bridge fans out to
 each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
 
-### API-based route registration
 
-Agents register their webhook endpoints via `POST /api/v1/routes`:
-
-```json
-POST /api/v1/routes
-{"email": "agent@company.com", "host": "127.0.0.1", "port": 8645}
-```
-
-Routes persist to `amail_routes.toml` and update in-memory routing immediately.
-Regex patterns are supported as route entries:
-
-```toml
-"alice@admin.relay" = "127.0.0.1:8645"
-".*@admin\\.relay" = "192.168.1.2:8645"
-```
 
 ### Security hardening
 

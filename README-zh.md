@@ -42,22 +42,7 @@ SIGINT/SIGTERM 优雅排空。
 每人各自的 headers，bridge 再扇出到各 webhook 端口。batch body 只序列化一次，
 所有条目复用。推拉模式均支持。
 
-### API 路由注册
 
-Agent 通过 `POST /api/v1/routes` 注册自己的 webhook 端点：
-
-```json
-POST /api/v1/routes
-{"email": "agent@company.com", "host": "127.0.0.1", "port": 8645}
-```
-
-路由持久化到 `amail_routes.toml` 并立即更新内存路由表。
-支持正则匹配的路由表条目：
-
-```toml
-"alice@admin.relay" = "127.0.0.1:8645"
-".*@admin\.relay" = "192.168.1.2:8645"
-```
 
 ### 安全加固
 
