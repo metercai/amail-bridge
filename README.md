@@ -2,13 +2,6 @@
 
 [🇨🇳 中文](README-zh.md)
 
-![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
-![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-969696)
-![Auto-Config](https://img.shields.io/badge/auto--config-inotify%20%7C%20ACME%20%7C%20routes-8A2BE2)
-![License](https://img.shields.io/badge/License-GPL--3.0-blue)
-![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)
-![Security](https://img.shields.io/badge/Security-OpenSSL%200-brightgreen)
-![TLS](https://img.shields.io/badge/TLS-rustls-purple)
 > Zero ports, email inbound. One port, instant forwarding to all agents.
 
 A high-performance transparent bridge between [amail-gateway](https://github.com/metercai/amail-gateway)
@@ -56,12 +49,17 @@ sends a **single body copy** with per-recipient headers — bridge fans out to
 each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
 
-### Multi-machine bridge routing
+### API-based route registration
 
-A single bridge can route emails to agents on multiple machines.
-Local agent profiles (`~/.hermes/profiles/*/`) are auto-discovered;
-entries in `amail_routes.toml` (`"email" = "host:port"`) override them.
-inotify hot-reloads on changes.
+Agents register their webhook endpoints via `POST /api/v1/routes`:
+
+```json
+POST /api/v1/routes
+{"email": "agent@company.com", "host": "127.0.0.1", "port": 8645}
+```
+
+Routes persist to `amail_routes.toml` and update in-memory routing immediately.
+Regex patterns are supported as route entries:
 
 ```toml
 "alice@admin.relay" = "127.0.0.1:8645"
@@ -81,8 +79,8 @@ inotify hot-reloads on changes.
 
 ### Zero-config automation
 
-- **Zero-config routing** — auto-scans `~/.hermes/profiles/` for agent webhook ports
-- **inotify hot-reload** — detects profile changes, rescans immediately
+- **API route registration** — agents register their webhook via `POST /api/v1/routes`
+- **inotify hot-reload** — changes to `amail_routes.toml` are applied immediately
 - **ACME auto-TLS** — set `hostname` → automatic Let's Encrypt certificate
   (HTTP-01 challenge), cached and auto-renewed every ~60 days
 - **Dual-port mode** — `addr` port 80 + `hostname` set → auto 80→443 redirect
@@ -281,7 +279,7 @@ When `addr` port is 80 and `hostname` is set:
 
 | Symptom | Check |
 |---|---|
-| No routes | Profile directory has `amail.json` + `config.yaml`? |
+| No routes | Agent registered via `POST /api/v1/routes`? |
 | Pull: no deliveries | `admin_key` scope correct? `system_id` matches? |
 | Push: 502 | Agent webhook port listening? |
 | Routes stale | `RUST_LOG=debug` to see inotify events |

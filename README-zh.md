@@ -1,12 +1,5 @@
 # amail-bridge
 
-![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange)
-![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-969696)
-![Auto-Config](https://img.shields.io/badge/auto--config-inotify%20%7C%20ACME%20%7C%20routes-8A2BE2)
-![License](https://img.shields.io/badge/License-GPL--3.0-blue)
-![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)
-![Security](https://img.shields.io/badge/Security-OpenSSL%200-brightgreen)
-![TLS](https://img.shields.io/badge/TLS-rustls-purple)
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
 
 连接 [amail-gateway](https://github.com/metercai/amail-gateway) 和
@@ -49,18 +42,21 @@ SIGINT/SIGTERM 优雅排空。
 每人各自的 headers，bridge 再扇出到各 webhook 端口。batch body 只序列化一次，
 所有条目复用。推拉模式均支持。
 
-### 正则匹配的多机路由
+### API 路由注册
 
-`[hosts]` 表以正则匹配 agent 邮箱 → 主机 IP，首匹配即胜，未匹配默认 `127.0.0.1`。
-从 Hermes profiles（`~/.hermes/profiles/*/amail.json` + `config.yaml`）自动发现，
-单个 bridge 可桥接多个机器上的 agent。
-本机 `~/.hermes/profiles/*/` 自动发现，
-`amail_routes.toml`（`"邮箱" = "ip:端口"`）人工干预为准。
-inotify 热更新，修改即时生效。
+Agent 通过 `POST /api/v1/routes` 注册自己的 webhook 端点：
+
+```json
+POST /api/v1/routes
+{"email": "agent@company.com", "host": "127.0.0.1", "port": 8645}
+```
+
+路由持久化到 `amail_routes.toml` 并立即更新内存路由表。
+支持正则匹配的路由表条目：
 
 ```toml
 "alice@admin.relay" = "127.0.0.1:8645"
-".*@admin.relay" = "192.168.1.2:8645"
+".*@admin\.relay" = "192.168.1.2:8645"
 ```
 
 ### 安全加固
@@ -76,8 +72,8 @@ inotify 热更新，修改即时生效。
 
 ### 零配置自动化
 
-- **零配置路由** — 自动扫描 `~/.hermes/profiles/` 发现 agent webhook 端口
-- **inotify 热更新** — 检测 profile 变更，立即重新扫描
+- **API 路由注册** — Agent 通过 `POST /api/v1/routes` 注册 webhook
+- **inotify 热更新** — 修改 `amail_routes.toml` 即时生效
 - **ACME 自动 TLS** — 设置 `hostname` → 自动 Let's Encrypt 证书（HTTP-01 挑战），
   缓存复用，每 ~60 天自动续期
 - **双端口模式** — `addr` 端口 80 + `hostname` 已设 → 自动 80→443 重定向
@@ -274,7 +270,7 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 | 现象 | 检查 |
 |---|---|
-| 无路由 | profile 目录是否有 `amail.json` + `config.yaml` |
+| 无路由 | Agent 是否通过 `POST /api/v1/routes` 注册了路由 |
 | pull 无数据 | `admin_key` scope 正确？`system_id` 匹配？ |
 | push 502 | agent webhook 端口是否在监听 |
 | 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
