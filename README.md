@@ -1,6 +1,6 @@
 # amail-bridge
 
-[🇨🇳 中文](README-zh.md)
+[🇨🇳 中文](README_zh.md)
 
 > Zero ports, email inbound. One port, instant forwarding to all agents.
 
@@ -48,7 +48,6 @@ When one email reaches multiple recipients behind the same bridge, the gateway
 sends a **single body copy** with per-recipient headers — bridge fans out to
 each webhook port. Batch body serialized once, reused across all entries.
 Works for both push and pull modes.
-
 
 
 ### Security hardening
@@ -195,13 +194,7 @@ level = "info"                        # log level (default: "info")
 file = "/var/log/amail-bridge.log"   # log file, stdout if unset (default: none)
 ```
 
-### Multi-machine deployment
 
-```toml
-[hosts]
-".*@admin.com" = "192.168.1.2"      # all agents on this domain → this host
-"alice@example.com" = "10.0.0.5"    # specific agent → specific host
-```
 
 ### Environment variables
 
@@ -221,31 +214,11 @@ file = "/var/log/amail-bridge.log"   # log file, stdout if unset (default: none)
 
 ## TLS & ACME
 
-When `hostname` is set, TLS is automatically enabled. Bridge attempts certificate
-acquisition in this priority order:
+Set `hostname` in config for automatic TLS via Let's Encrypt (HTTP-01 challenge).
+Certificate is cached and auto-renewed. Port 80 must be reachable for ACME validation.
 
-```
-Startup
-  ├─ tls_cert + tls_key present → use static certs
-  ├─ hostname set → run ACME HTTP-01 challenge (Let's Encrypt)
-  │   ├─ success → persist cert + key to acme_cache, start auto-renew loop
-  │   └─ failure → warn, fall back to plain HTTP (service continues)
-  └─ no hostname → plain HTTP
-```
-
-- Certificate stored in `acme_cache` (default `./acme_cache`)
-- Auto-renewed ~60 days after issuance (checks every 12 hours)
-- **Requires port 80** to be available for HTTP-01 challenge validation
-  (root or `CAP_NET_BIND_SERVICE` on Linux)
-- Domain in `hostname` must resolve to the bridge server's public IP
-- Pure Rust — zero OpenSSL dependency (instant-acme + ring crypto)
-
-### Dual-port mode
-
-When `addr` port is 80 and `hostname` is set:
-- Port 80 serves ACME challenge validation + redirects to 443
-- Port 443 serves the actual HTTPS application
-- Single config line enables both — no manual TLS wiring needed
+**Dual-port mode:** When `addr` is port 80 + `hostname` set, port 80 handles ACME
+challenge + redirects to 443; port 443 serves the application.
 
 ---
 
@@ -256,7 +229,7 @@ When `addr` port is 80 and `hostname` is set:
 | gateway + agents on same machine | Push | Bridge proxies single port to local webhook ports |
 | gateway public, agents behind NAT | Pull | Bridge polls gateway outbound, zero inbound ports |
 | Bridge on public VPS | Push + TLS | `hostname = "bridge.example.com"`, ACME auto-cert, dual-port |
-| Multi-machine LAN | Push/Pull | `[hosts]` maps agent emails to machine IPs |
+
 
 ---
 
@@ -264,7 +237,6 @@ When `addr` port is 80 and `hostname` is set:
 
 | Symptom | Check |
 |---|---|
-| No routes | Agent registered via `POST /api/v1/routes`? |
 | Pull: no deliveries | `admin_key` scope correct? `system_id` matches? |
 | Push: 502 | Agent webhook port listening? |
 | Routes stale | `RUST_LOG=debug` to see inotify events |

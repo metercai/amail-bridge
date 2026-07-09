@@ -1,3 +1,5 @@
+[English](README.md) | 🇨🇳 中文
+
 # amail-bridge
 
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
@@ -188,13 +190,7 @@ level = "info"                        # 日志级别（默认："info"）
 file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 ```
 
-### 多机部署
 
-```toml
-[hosts]
-".*@admin.com" = "192.168.1.2"      # 域内所有 agent → 这台机器
-"alice@example.com" = "10.0.0.5"    # 指定 agent → 指定 IP
-```
 
 ### 环境变量
 
@@ -214,29 +210,11 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 ## TLS 与 ACME
 
-当配置了 `hostname`，TLS 自动启用。bridge 按以下优先级获取证书：
+设置 `hostname` 即可自动启用 Let's Encrypt TLS（HTTP-01 挑战）。
+证书自动缓存续期，端口 80 需公网可达。
 
-```
-启动流程
-  ├─ tls_cert + tls_key 存在 → 使用静态证书
-  ├─ hostname 已设 → 通过 ACME HTTP-01 挑战申请 Let's Encrypt 证书
-  │   ├─ 成功 → 证书+密钥保存到 acme_cache，启动后台自动续期
-  │   └─ 失败 → 警告，回退到 HTTP（服务不中断）
-  └─ 未设 hostname → 纯 HTTP
-```
-
-- 证书保存在 `acme_cache` 目录（默认 `./acme_cache`）
-- 签发约 60 天后自动续期（每 12 小时检查一次）
-- **需要端口 80** 可用于 HTTP-01 挑战验证（Linux 需 root 或 `CAP_NET_BIND_SERVICE`）
-- `hostname` 中的域名必须解析到 bridge 服务器 IP
-- 纯 Rust 实现 — 零 OpenSSL 依赖（instant-acme + ring crypto）
-
-### 双端口模式
-
-当 `addr` 端口为 80 且 `hostname` 已设置：
-- 端口 80 处理 ACME 挑战验证 + 重定向到 443
-- 端口 443 处理主 HTTPS 应用
-- 一条配置行同时启用两者，无需手动 TLS 接线
+**双端口模式：** `addr` 为 80 + `hostname` 已设时，80 处理 ACME 验证 +
+重定向到 443，443 处理 HTTPS 应用。
 
 ---
 
@@ -247,7 +225,6 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 | gateway+agent 同机 | Push | bridge 单端口转发到本地各 webhook 端口 |
 | gateway 在公网，agent 在 NAT 后 | Pull | bridge 出站轮询 gateway，零入站端口 |
 | 公网 VPS 部署 bridge | Push + TLS | `hostname = "bridge.example.com"`，ACME 自动证书，双端口 |
-| 多机 LAN 部署 | Push/Pull | `[hosts]` 配置各 agent 所在机器 IP |
 
 ---
 
@@ -255,7 +232,6 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 | 现象 | 检查 |
 |---|---|
-| 无路由 | Agent 是否通过 `POST /api/v1/routes` 注册了路由 |
 | pull 无数据 | `admin_key` scope 正确？`system_id` 匹配？ |
 | push 502 | agent webhook 端口是否在监听 |
 | 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
