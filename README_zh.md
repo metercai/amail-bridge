@@ -228,12 +228,3 @@ file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
 
 ---
 
-## 故障排查
-
-| 现象 | 检查 |
-|---|---|
-| pull 无数据 | `admin_key` scope 正确？`system_id` 匹配？ |
-| push 502 | agent webhook 端口是否在监听 |
-| 路由不更新 | `RUST_LOG=debug` 查看 inotify 事件 |
-| ACME 回退到 HTTP | 域名解析到 bridge IP？80 端口公网可达？`RUST_LOG=debug` 看 ACME 详情 |
-| 80 端口被占 | 释放 80 端口或使用静态证书，或将 `addr` 设成非 80 端口 |

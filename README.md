@@ -233,12 +233,3 @@ challenge + redirects to 443; port 443 serves the application.
 
 ---
 
-## Troubleshooting
-
-| Symptom | Check |
-|---|---|
-| Pull: no deliveries | `admin_key` scope correct? `system_id` matches? |
-| Push: 502 | Agent webhook port listening? |
-| Routes stale | `RUST_LOG=debug` to see inotify events |
-| ACME: fallback to HTTP | Domain resolves to bridge IP? Port 80 reachable? `RUST_LOG=debug` for ACME details |
-| Port 80 busy | Free port 80 or use static certs, or set `addr` port ≠ 80 |
