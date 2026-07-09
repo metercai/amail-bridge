@@ -31,6 +31,7 @@ pub struct BridgeConfig {
 
     /// ACME certificate cache directory. Defaults to ~/.acme_cache/
     #[serde(default)]
+    #[allow(dead_code)]
     pub acme_cache: Option<PathBuf>,
 
     /// Allowed source IPs/CIDRs for admin API access.
@@ -90,6 +91,7 @@ impl BridgeConfig {
     }
 
     /// Returns true if TLS should be enabled (hostname is a domain, not IP).
+    #[allow(dead_code)]
     pub fn has_tls(&self) -> bool {
         self.hostname.as_ref().map_or(false, |h| !is_ip_address(h))
     }

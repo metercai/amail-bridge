@@ -18,11 +18,11 @@
 //!   3. No match → `None` + warning log
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode, Watcher};
 
 /// A single routing entry.
 #[derive(Debug, Clone)]
@@ -266,6 +266,7 @@ impl ProfileRouter {
 
     /// Write the route table to amail_routes.toml, preserving regex patterns
     /// from the given file_overrides map. Used by load_from_file().
+    #[allow(dead_code)]
     fn write_routes_file_with(&self, file_overrides: &HashMap<String, ProfileRoute>) {
         let path = &self.routes_file;
         self.writing_routes.store(true, Ordering::SeqCst);

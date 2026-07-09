@@ -18,7 +18,6 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use crate::config::BridgeConfig;
-use crate::config::is_ip_address;
 use crate::router::ProfileRouter;
 
 /// Application state shared across admin handlers.
@@ -26,6 +25,7 @@ use crate::router::ProfileRouter;
 pub struct AdminState {
     pub router: Arc<ProfileRouter>,
     pub config: BridgeConfig,
+    #[allow(dead_code)]
     pub allowed_ips: Vec<(std::net::IpAddr, u8)>,
     pub startup: std::time::Instant,
 }

@@ -306,6 +306,7 @@ async fn handle_webhook(
 }
 
 /// Start the push-mode HTTP server (plain, no TLS).
+#[allow(dead_code)]
 pub async fn start_push_server(
     app: axum::Router,
     addr: SocketAddr,
@@ -334,6 +335,7 @@ pub async fn start_push_server(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn start_push_http(
     shutdown: Arc<AtomicBool>,
     app: Router,
@@ -465,6 +467,7 @@ async fn handle_batch_webhook(
     }
 }
 
+#[allow(dead_code)]
 fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
     let cert_file = std::fs::File::open(cert_path)?;
