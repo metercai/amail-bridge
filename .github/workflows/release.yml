@@ -16,15 +16,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── macOS (target macOS 11+) ──
-          - target: x86_64-apple-darwin
-            os: macos-13
-            platform: macos-amd64
-            ext: ""
-          - target: aarch64-apple-darwin
-            os: macos-14
-            platform: macos-arm64
-            ext: ""
+# # ── macOS (target macOS 11+) ──
+          # - target: x86_64-apple-darwin
+          #   os: macos-13
+          #   platform: macos-amd64
+          #   ext: ""
+          # - target: aarch64-apple-darwin
+          #   os: macos-14
+          #   platform: macos-arm64
+          #   ext: ""
           # ── Windows ──
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -76,8 +76,6 @@ jobs:
 
             | Suffix | Compatible with |
             |--------|-----------------|
-            | `macos-amd64` | macOS 11+ (Intel) |
-            | `macos-arm64` | macOS 11+ (Apple Silicon) |
             | `windows-amd64` | Windows 10+ |
 
             All TLS crypto is pure Rust (ring/rustls) — no OpenSSL required on any platform.
