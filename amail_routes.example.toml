@@ -1,14 +1,17 @@
-# amail-bridge multi-machine routing
+# amail-bridge route table
 #
-# Copy this file to amail-routes.toml and edit to match your setup.
-# Changes take effect immediately (inotify hot-reload).
-
-# Local agents are auto-discovered from ~/.hermes/profiles/*/.
-# Entries here override auto-discovery — manual intervention takes precedence.
+# Copy this file to amail_routes.toml (same directory as amail_bridge.toml).
+# Changes take effect immediately via inotify hot-reload.
 #
-# Two types of entries:
-#   "exact@email"      = "host:port"   # exact email override
-#   "regex-pattern"    = "host:port"   # applies to all matching emails
+# Local agent routes are auto-discovered from ~/.hermes/profiles/*/.
+# Entries here override auto-discovery.
+#
+# Format:
+#   "email" = "host:port"          # exact match
+#   "regex" = "host:port"          # regex pattern match
 
-"alice@admin.relay"  = "127.0.0.1:8645"
-".*@admin\\.relay"   = "192.168.1.2:8645"
+# Local agents (auto-discovered, override example)
+"agent@company.com" = "127.0.0.1:8645"
+
+# Remote relay
+".*@relay\\.example\\.com" = "192.168.1.10:8645"
