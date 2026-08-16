@@ -34,3 +34,17 @@ pub fn ip_matches(ip: IpAddr, network: IpAddr, prefix: u8) -> bool {
         _ => false,
     }
 }
+
+/// Parse "192.168.1.1" or "10.0.0.0/8" into (network, prefix_len).
+/// Shared by admin.rs (admin_allowed_ips) and push.rs (allowed/blacklist).
+pub fn parse_cidr(s: &str) -> Option<(IpAddr, u8)> {
+    let (ip_s, prefix) = if let Some((ip, pfx)) = s.split_once('/') {
+        (ip, pfx.parse::<u8>().ok()?)
+    } else {
+        (s, if s.contains(':') { 128 } else { 32 }) // implicit /32 or /128
+    };
+    let ip: IpAddr = ip_s.parse().ok()?;
+    let max = if ip.is_ipv4() { 32 } else { 128 };
+    if prefix > max { return None; }
+    Some((ip, prefix))
+}

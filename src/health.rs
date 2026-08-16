@@ -55,10 +55,12 @@ async fn check_routes(router: &ProfileRouter, failures: &mut HashMap<String, u32
         return;
     }
 
-    // Group by unique target
+    // Group by unique target — parse host:port from the route's target URL
+    // (handles https URLs where r.port defaults to 80 but the real endpoint
+    // is 443; AUDIT-1 A3).
     let mut target_groups: HashMap<String, Vec<String>> = HashMap::new();
     for r in &routes {
-        let target = format!("{}:{}", r.host, r.port);
+        let target = route_target_key(r);
         target_groups.entry(target).or_default().push(r.email.clone());
     }
 
@@ -124,7 +126,37 @@ async fn check_routes(router: &ProfileRouter, failures: &mut HashMap<String, u32
     }
 }
 
-/// TCP probe: connect to host:port with timeout.
+/// Extract "host:port" from a route's target URL — handles https URLs
+/// (port 443 when absent) and full paths (AUDIT-1 A3).
+fn route_target_key(r: &crate::router::ProfileRoute) -> String {
+    let url = r.target_url();
+    // Strip scheme
+    let rest = url.strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    // Split authority from path
+    let (authority, _) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    // Parse host + port (IPv6 [::1]:port supported)
+    if let Some(b) = authority.strip_prefix('[') {
+        if let Some((h, p)) = b.split_once("]:") {
+            if let Ok(port) = p.parse::<u16>() {
+                return format!("[{}]:{}", h, port);
+            }
+        }
+        return format!("[{}]:443", b.trim_end_matches(']'));
+    }
+    if let Some((h, p)) = authority.rsplit_once(':') {
+        if let Ok(port) = p.parse::<u16>() {
+            return format!("{}:{}", h, port);
+        }
+    }
+    let port = if url.starts_with("https://") { 443 } else { 80 };
+    format!("{}:{}", authority, port)
+}
+
 /// TCP probe: connect to host:port with timeout.
 async fn probe_target(host: &str, port: u16, timeout_secs: u64) -> bool {
     let addr = format!("{}:{}", host, port);
@@ -143,5 +175,54 @@ async fn probe_target(host: &str, port: u16, timeout_secs: u64) -> bool {
             tracing::debug!(target = %addr, "TCP probe timed out");
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn router_with_route(target: &str) -> ProfileRouter {
+        let router = ProfileRouter::new(std::path::PathBuf::from("/nonexistent/routes.toml"));
+        router.update_route("a@x.com", target, 0);
+        router
+    }
+
+    #[test]
+    fn test_route_target_key_http_url() {
+        let router = router_with_route("http://127.0.0.1:8646/webhooks/agentmail-inbound");
+        let r = router.list_routes().pop().unwrap();
+        assert_eq!(route_target_key(&r), "127.0.0.1:8646");
+    }
+
+    #[test]
+    fn test_route_target_key_https_url_no_port() {
+        let router = router_with_route("https://10.0.0.5/webhooks/agentmail-inbound");
+        let r = router.list_routes().pop().unwrap();
+        // https without port → 443 (AUDIT-1 A3: r.port would be 80)
+        assert_eq!(route_target_key(&r), "10.0.0.5:443");
+    }
+
+    #[test]
+    fn test_route_target_key_http_url_no_port() {
+        let router = router_with_route("http://10.0.0.6/hook");
+        let r = router.list_routes().pop().unwrap();
+        assert_eq!(route_target_key(&r), "10.0.0.6:80");
+    }
+
+    #[test]
+    fn test_route_target_key_ipv6() {
+        let router = router_with_route("http://[::1]:8799/hook");
+        let r = router.list_routes().pop().unwrap();
+        assert_eq!(route_target_key(&r), "[::1]:8799");
+    }
+
+    #[test]
+    fn test_route_target_key_bare_hostport() {
+        // Legacy bare host:port route → target_url has /webhooks/amail-inbound
+        let router = ProfileRouter::new(std::path::PathBuf::from("/nonexistent/routes.toml"));
+        router.update_route("e@x.com", "127.0.0.1", 8645);
+        let r = router.list_routes().pop().unwrap();
+        assert_eq!(route_target_key(&r), "127.0.0.1:8645");
     }
 }

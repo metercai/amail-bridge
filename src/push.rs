@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -70,16 +69,9 @@ impl IpAllowlist {
 }
 
 /// Parse "192.168.1.1" or "10.0.0.0/8" into (network, prefix_len).
+/// Shared implementation in security.rs (AUDIT-1 C3).
 fn parse_cidr(s: &str) -> Option<(IpAddr, u8)> {
-    let (ip_s, prefix) = if let Some((ip, pfx)) = s.split_once('/') {
-        (ip, pfx.parse::<u8>().ok()?)
-    } else {
-        (s, if s.contains(':') { 128 } else { 32 }) // implicit /32 or /128
-    };
-    let ip: IpAddr = ip_s.parse().ok()?;
-    let max = if ip.is_ipv4() { 32 } else { 128 };
-    if prefix > max { return None; }
-    Some((ip, prefix))
+    crate::security::parse_cidr(s)
 }
 
 /// IP/CIDR blacklist. Empty = allow all.
@@ -305,61 +297,6 @@ async fn handle_webhook(
     }
 }
 
-/// Start the push-mode HTTP server (plain, no TLS).
-#[allow(dead_code)]
-pub async fn start_push_server(
-    app: axum::Router,
-    addr: SocketAddr,
-    shutdown: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("amail-bridge (push mode) running on {}", addr);
-
-    let shutdown_signal = async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if shutdown.load(Ordering::SeqCst) {
-                tracing::info!("Push server shutting down");
-                break;
-            }
-        }
-    };
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal)
-    .await?;
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn start_push_http(
-    shutdown: Arc<AtomicBool>,
-    app: Router,
-    addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let shutdown_signal = async move {
-        loop {
-            if shutdown.load(Ordering::SeqCst) {
-                tracing::info!("Push server shutting down gracefully");
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    };
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal)
-    .await?;
-    Ok(())
-}
-
 /// Map a forward header name to its value for batch webhook entries.
 /// Returns None for unknown header names (skipped with debug log).
 fn batch_header_value(
@@ -467,8 +404,9 @@ async fn handle_batch_webhook(
     }
 }
 
-#[allow(dead_code)]
-fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
+/// Build a rustls TLS config from PEM cert + key files.
+/// Used when `tls_cert` and `tls_key` are both configured (static certs).
+pub fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
     use std::io::BufReader;
     let cert_file = std::fs::File::open(cert_path)?;
     let key_file = std::fs::File::open(key_path)?;

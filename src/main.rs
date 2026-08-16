@@ -205,13 +205,12 @@ pub fn main() {
         .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
-        let daemon = cli.daemon;
-        let pid_file_display = pid_file.clone();
         let result = async_main(cli, pid_file, log_file).await;
-        // Always clean up PID file, even on error
-        if daemon {
-            let _ = std::fs::remove_file(&pid_file_display);
-        }
+        // NOTE: pid file is intentionally NOT removed on exit (AUDIT-1 A4).
+        // deploy_bridge's start_bridge kills stale processes via the pid file
+        // before starting a new instance; deleting it here makes that fail
+        // after a crash/restart (double-instance risk). The next start
+        // overwrites it.
         if let Err(e) = result {
             tracing::error!(error = %e, "Fatal error");
             std::process::exit(1);
@@ -298,6 +297,33 @@ async fn async_main(
 
     let sock_addr: std::net::SocketAddr = config.addr.parse()?;
 
+    // TLS setup for push-mode inbound HTTPS (AUDIT-1, user requirement):
+    // hostname is a domain → try static certs (tls_cert + tls_key),
+    // else ACME (planned) — fall back to plain HTTP with a warning.
+    let tls_config: Option<axum_server::tls_rustls::RustlsConfig> = if config.mode == "push"
+        && config.has_tls()
+    {
+        if let (Some(cert), Some(key)) = (config.tls_cert.as_deref(), config.tls_key.as_deref()) {
+            match push::build_tls_config_from_paths(cert, key) {
+                Ok(t) => {
+                    tracing::info!("TLS enabled (static cert: {})", cert.display());
+                    Some(t)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "TLS cert load failed — falling back to plain HTTP");
+                    None
+                }
+            }
+        } else {
+            tracing::warn!(
+                "hostname is a domain but tls_cert/tls_key not set — ACME auto-cert is planned but not yet wired; serving plain HTTP"
+            );
+            None
+        }
+    } else {
+        None
+    };
+
     if config.mode == "pull" {
         // Route health check runs as a background task
         let health_router = router.clone();
@@ -340,8 +366,11 @@ async fn async_main(
         if let Some(msg) = err_msg {
             return Err(msg.into());
         }
+    } else if let Some(tls) = tls_config {
+        // Push mode with TLS → HTTPS server
+        start_https(app, sock_addr, shutdown.clone(), tls).await?;
     } else {
-        // Plain HTTP server
+        // Plain HTTP server (push without TLS, or pull admin API)
         start_http(app, sock_addr, shutdown.clone()).await?;
     }
 
@@ -369,6 +398,37 @@ async fn start_http(
     )
     .with_graceful_shutdown(shutdown_signal)
     .await?;
+    Ok(())
+}
+
+/// Start an HTTPS server (rustls) with graceful shutdown — push mode
+/// inbound TLS support (AUDIT-1, user requirement 2026-08-16).
+async fn start_https(
+    app: axum::Router,
+    addr: std::net::SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    tls: axum_server::tls_rustls::RustlsConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("amail-bridge serving HTTPS on {}", addr);
+    let handle = axum_server::Handle::new();
+    let shutdown_clone = shutdown.clone();
+    let handle_clone = handle.clone();
+    // Watch the shutdown flag and trigger graceful shutdown via the handle
+    // (axum-server integrates graceful shutdown into its accept loop; we
+    // only need to signal it).
+    tokio::spawn(async move {
+        loop {
+            if shutdown_clone.load(Ordering::SeqCst) {
+                handle_clone.graceful_shutdown(None);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    });
+    axum_server::bind_rustls(addr, tls)
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .await?;
     Ok(())
 }
 

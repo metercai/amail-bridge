@@ -58,19 +58,9 @@ pub fn build_admin_router(config: &BridgeConfig, router: Arc<ProfileRouter>) -> 
     }
 }
 
-/// Parse IP/CIDR list from config strings.
+/// Parse IP/CIDR list from config strings (shared impl in security.rs).
 fn parse_ip_list(raw: &[String]) -> Vec<(std::net::IpAddr, u8)> {
-    raw.iter().filter_map(|s| {
-        let (ip_s, prefix) = if let Some((ip, pfx)) = s.split_once('/') {
-            (ip, pfx.parse::<u8>().ok()?)
-        } else {
-            (s.as_str(), if s.contains(':') { 128 } else { 32 })
-        };
-        let ip: std::net::IpAddr = ip_s.parse().ok()?;
-        let max = if ip.is_ipv4() { 32 } else { 128 };
-        if prefix > max { return None; }
-        Some((ip, prefix))
-    }).collect()
+    raw.iter().filter_map(|s| crate::security::parse_cidr(s)).collect()
 }
 
 /// Middleware: reject requests from IPs not in the admin allowlist.

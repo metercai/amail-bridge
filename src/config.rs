@@ -30,14 +30,16 @@ pub struct BridgeConfig {
     pub tls_key: Option<PathBuf>,
 
     /// ACME certificate cache directory. Defaults to ~/.acme_cache/
+    /// (ACME auto-cert is planned but not yet wired — field reserved).
     #[serde(default)]
     #[allow(dead_code)]
     pub acme_cache: Option<PathBuf>,
 
     /// Allowed source IPs/CIDRs for admin API access.
     /// Requests to /health and /api/v1/* from other IPs get 403.
-    /// Default: localhost only.
-    #[serde(default)]
+    /// Default: localhost only (AUDIT-1 D1 — empty previously meant
+    /// allow-all, a route-poisoning risk on public deployments).
+    #[serde(default = "default_admin_allowed_ips")]
     pub admin_allowed_ips: Vec<String>,
 
     /// Forward headers that bridge passes through to gateway.
@@ -64,11 +66,6 @@ pub struct BridgeConfig {
     /// Path to amail_routes.toml (default: alongside amail_bridge.toml).
     #[serde(skip)]
     pub routes_file: PathBuf,
-
-    /// Per-agent host overrides (deprecated — use amail_routes.toml).
-    #[serde(default, deserialize_with = "deserialize_hosts_vec")]
-    #[allow(dead_code)]
-    pub hosts: Vec<(String, String)>,
 
     /// Logging configuration.
     #[serde(default)]
@@ -110,29 +107,6 @@ pub(crate) fn is_ip_address(host: &str) -> bool {
     host_only.parse::<std::net::IpAddr>().is_ok()
 }
 
-/// Custom deserializer: reads a TOML table into a Vec, preserving insertion order.
-/// Required because `HashMap<String, String>` does NOT preserve order;
-/// the user-written TOML order is the intended "first match wins" priority.
-fn deserialize_hosts_vec<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<(String, String)>, D::Error> {
-    use serde::de::{MapAccess, Visitor};
-    use std::fmt;
-    struct MapToVec;
-    impl<'de> Visitor<'de> for MapToVec {
-        type Value = Vec<(String, String)>;
-        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("a TOML table of host regex → ip/hostname pairs")
-        }
-        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-            let mut v = Vec::new();
-            while let Some((k, val)) = map.next_entry::<String, String>()? {
-                v.push((k, val));
-            }
-            Ok(v)
-        }
-    }
-    d.deserialize_map(MapToVec)
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct PushConfig {
     /// IP/CIDR allowlist for webhook POSTs. Empty = allow all.
@@ -154,9 +128,6 @@ pub struct PushConfig {
     /// Virtual host sites (optional).
     #[serde(default)]
     pub sites: Vec<VhostSiteConfig>,
-}
-
-impl PushConfig {
 }
 
 impl Default for PushConfig {
@@ -313,6 +284,12 @@ fn default_log_level() -> String { "info".into() }
 fn default_health_check_interval() -> u64 { 60 }
 fn default_health_fail_threshold() -> u32 { 3 }
 fn default_health_connect_timeout() -> u64 { 3 }
+/// Admin API default: localhost only (AUDIT-1 D1). Empty previously
+/// meant allow-all — route management exposed to any IP on public
+/// deployments is a poisoning vector.
+fn default_admin_allowed_ips() -> Vec<String> {
+    vec!["127.0.0.1".into(), "::1".into()]
+}
 
 impl Default for PullConfig {
     fn default() -> Self {
@@ -393,13 +370,6 @@ impl BridgeConfig {
             tracing::info!("dual-port mode enabled (port 80 → 443)");
         }
     }
-
-    /// Compile host patterns into (Regex, host) pairs for the router.
-    #[allow(dead_code)]
-    pub fn compiled_hosts(&self) -> Vec<(regex::Regex, String)> {
-        tracing::warn!("[hosts] in amail_bridge.toml is deprecated — use amail_routes.toml instead");
-        Vec::new()
-    }
 }
 
 #[cfg(test)]
@@ -417,7 +387,7 @@ system_id = "s"
 "#).unwrap();
         assert_eq!(cfg.mode, "pull");
         assert_eq!(cfg.addr, "0.0.0.0:38080");
-        assert!(cfg.admin_allowed_ips.is_empty());
+        assert_eq!(cfg.admin_allowed_ips, vec!["127.0.0.1", "::1"], "D1: admin API defaults to localhost-only");
         assert_eq!(cfg.push.body_limit_mb, 20);
         assert_eq!(cfg.push.rate_limit, 30);
         assert!(cfg.hostname.is_none());
@@ -518,7 +488,7 @@ system_id = ""
     }
 
     #[test]
-    fn test_admin_allowed_ips_default_empty() {
+    fn test_admin_allowed_ips_default_localhost() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "pull"
 [pull]
@@ -526,20 +496,8 @@ amail_url = "http://x"
 admin_key = "k"
 system_id = "s"
 "#).unwrap();
-        assert!(cfg.admin_allowed_ips.is_empty());
-    }
-
-    #[test]
-    fn test_compiled_hosts_deprecated() {
-        let cfg: BridgeConfig = toml::from_str(r#"
-mode = "pull"
-[pull]
-amail_url = "http://x"
-admin_key = "k"
-system_id = "s"
-"#).unwrap();
-        let compiled = cfg.compiled_hosts();
-        assert!(compiled.is_empty());
+        assert_eq!(cfg.admin_allowed_ips, vec!["127.0.0.1", "::1"],
+                   "D1: admin API defaults to localhost-only");
     }
 
     #[test]
