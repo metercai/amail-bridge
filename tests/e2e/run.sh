@@ -12,6 +12,8 @@ BRIDGE_BIN="${BRIDGE_BIN:-$PROJECT_DIR/target/debug/amail-bridge}"
 
 WORK_DIR="${WORK_DIR:-/tmp/bridge-e2e}"
 RS=35010; RH=39010; RS2=35011; RH2=39011; BP=38080; BP2=38081; HP=39999
+# multi-system: second push gateway, second pull gateway, multi-system pull bridge
+RS3=35012; RH3=39012; RS4=35013; RH4=39013; BP3=38082
 HL="$WORK_DIR/hermes.log"; H="X-Api-Key:"; J="Content-Type: application/json"
 BASE="http://127.0.0.1"
 
@@ -153,6 +155,88 @@ rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"noroute@bridge.test","sub
 # P6: same-domain aggregate (3 recipients → 1 webhook)
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test, agent2@bridge.test, cc-agent@bridge.test","subject":"P6-Aggregate","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "P-6 aggregate: $n OK" || warn "P-6 aggregate: $n"
 
+# ═══════════════════════════════════
+# MULTI-SYSTEM PUSH (two gateways → one bridge)
+# ═══════════════════════════════════
+echo; echo "═════ MULTI-SYSTEM PUSH TESTS ═════"
+
+# Second gateway = system B (domain bridge2.test), same bridge as system A
+mkdir -p "$WORK_DIR/relay3-data"
+cat > "$WORK_DIR/relay3.toml" << EOF
+[smtp]
+bind = "127.0.0.1:${RS3}"
+hostname = "relay3.local"
+[http]
+bind = "127.0.0.1:${RH3}"
+[storage]
+path = "${WORK_DIR}/relay3-data"
+[retry]
+max_attempts = 1
+[logging]
+level = "info"
+EOF
+"$GW_BIN" -c "$WORK_DIR/relay3.toml" --pid-file "$WORK_DIR/pid3" > "$WORK_DIR/relay3.log" 2>&1 &
+GW2_PID=$!; sleep 4
+for i in $(seq 1 15); do
+    AK3=$(cat "$WORK_DIR/relay3-data/amail.db.admin_key" 2>/dev/null||echo "")
+    [[ -n "$AK3" ]] && break; sleep 1
+done
+for i in $(seq 1 15); do
+    [[ "$(curl -s -o/dev/null -w'%{http_code}' "http://127.0.0.1:$RH3/health")" == 200 ]] && break
+    sleep 1
+done
+pass "relay B (bridge2.test) running"
+B3="http://127.0.0.1:${RH3}"
+
+# Seed system B: domain + addresses (webhook → same bridge) + whitelists + send key
+curl -s -X POST "$B3/api/v1/admin/systems/admin/domains" -H "$H ${AK3}" -H "$J" -d '{"id":"dom-bridge2","domain":"bridge2.test"}' >/dev/null
+# sender@test.local needs its domain registered in this gateway too
+curl -s -X POST "$B3/api/v1/admin/systems/admin/domains" -H "$H ${AK3}" -H "$J" -d '{"id":"dom-tlocal3","domain":"test.local"}' >/dev/null
+for addr in agent@bridge2.test agent2@bridge2.test cc-agent@bridge2.test empty@bridge2.test; do
+    curl -s -X POST "$B3/api/v1/admin/systems/admin/addresses" -H "$H ${AK3}" -H "$J" \
+        -d "{\"id\":\"b2-${addr%@*}\",\"email\":\"$addr\",\"webhook_url\":\"$BASE:${BP}/webhooks/bridge\"}" >/dev/null
+done
+curl -s -X POST "$B3/api/v1/admin/systems/admin/addresses" -H "$H ${AK3}" -H "$J" \
+    -d '{"id":"b2-sender","email":"sender@test.local"}' >/dev/null
+curl -s -X POST "$B3/api/v1/whitelists" -H "$H ${AK3}" -H "$J" -d '{"system_id":"admin","domain_addr":"bridge2.test","direction":"from","value":"*@test.local"}' >/dev/null
+SK3=$(python3 "$SCRIPT_DIR/create_key.py" "$B3/api/v1/api-keys" "$AK3")
+curl -s -X POST "$B3/api/v1/whitelists" -H "$H ${AK3}" -H "$J" -d '{"system_id":"admin","domain_addr":"sender@test.local","direction":"to","value":"*@bridge2.test"}' >/dev/null
+for addr in agent@bridge2.test agent2@bridge2.test cc-agent@bridge2.test empty@bridge2.test; do
+    curl -s -X POST "$B3/api/v1/whitelists" -H "$H ${AK3}" -H "$J" \
+        -d "{\"system_id\":\"admin\",\"domain_addr\":\"$addr\",\"direction\":\"from\",\"value\":\"*@test.local\"}" >/dev/null
+done
+[[ -n "$SK3" ]] || fail "no system-B send key"
+pass "relay B seeded"
+
+# System B routes join the shared bridge route table (hot-reload)
+cat >> "$WORK_DIR/bridge/amail_routes.toml" << EOF
+"agent@bridge2.test" = "127.0.0.1:${HP}"
+"agent2@bridge2.test" = "127.0.0.1:${HP}"
+"cc-agent@bridge2.test" = "127.0.0.1:${HP}"
+"empty@bridge2.test" = "127.0.0.1:${HP}"
+EOF
+sleep 2  # let inotify hot-reload pick up the new routes
+
+S3() { local code=$(curl -s -w "%{http_code}" -o /dev/null -X POST "$B3/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: $SK3" "$@" 2>/dev/null); echo "SEND3: $code" >&2; }
+
+# M-P1: system A still works via the shared bridge
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"MP1-A","markdown":"t."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "M-P1 system-A single"
+
+# M-P2: system B delivers through the SAME bridge
+rm -f "$HL"; S3 -d '{"sender":"sender@test.local","to":"agent@bridge2.test","subject":"MP2-B","markdown":"t."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "M-P2 system-B single"
+
+# M-P3: both systems interleaved — each email routed to its own agent
+rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"MP3-A1","markdown":"t."}' >/dev/null
+S3 -d '{"sender":"sender@test.local","to":"agent@bridge2.test","subject":"MP3-B1","markdown":"t."}' >/dev/null
+S -d '{"sender":"sender@test.local","to":"agent2@bridge.test","subject":"MP3-A2","markdown":"t."}' >/dev/null
+S3 -d '{"sender":"sender@test.local","to":"agent2@bridge2.test","subject":"MP3-B2","markdown":"t."}' >/dev/null
+n=$(wait_hermes 4); expect "$n" 4 "M-P3 4 emails (2 systems x 2 agents)"
+
+# M-P4: system B batch aggregation
+rm -f "$HL"; S3 -d '{"sender":"sender@test.local","to":"agent@bridge2.test, agent2@bridge2.test, cc-agent@bridge2.test","subject":"MP4-B","markdown":"t."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "M-P4 system-B aggregate: $n OK" || fail "M-P4 system-B aggregate: $n"
+
+kill -9 "$GW2_PID" 2>/dev/null||true; wait "$GW2_PID" 2>/dev/null||true
+
 cp "$WORK_DIR/relay.log" "/tmp/relay-push-saved.log" 2>/dev/null || true
 kill -9 "$BRIDGE_PID" 2>/dev/null||true; sleep 3; wait "$BRIDGE_PID" 2>/dev/null||true
 
@@ -257,5 +341,115 @@ PB=$(curl -s "$B2/api/v1/admin/pending" -H "$H ${AK}" | python3 -c "import sys,j
 sleep 10
 PA=$(curl -s "$B2/api/v1/admin/pending" -H "$H ${AK}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null||echo 0)
 [[ "$PA" -lt "$PB" || "$PA" -eq 0 ]] && pass "Q-7 ACK: $PB→$PA" || warn "Q-7 ACK: $PB→$PA"
+
+# ═══════════════════════════════════
+# MULTI-SYSTEM PULL (one bridge ← two gateways/systems)
+# ═══════════════════════════════════
+echo; echo "═════ MULTI-SYSTEM PULL TESTS ═════"
+
+# Second pull gateway = system B (domain pull2.test)
+mkdir -p "$WORK_DIR/relay4-data"
+cat > "$WORK_DIR/relay4.toml" << EOF
+[smtp]
+bind = "127.0.0.1:${RS4}"
+hostname = "relay4.local"
+[http]
+bind = "127.0.0.1:${RH4}"
+[storage]
+path = "${WORK_DIR}/relay4-data"
+[retry]
+max_attempts = 1
+[logging]
+level = "info"
+EOF
+"$GW_BIN" -c "$WORK_DIR/relay4.toml" --pid-file "$WORK_DIR/pid4" > "$WORK_DIR/relay4.log" 2>&1 &
+GW3_PID=$!; sleep 4
+for i in $(seq 1 15); do
+    AK4=$(cat "$WORK_DIR/relay4-data/amail.db.admin_key" 2>/dev/null||echo "")
+    [[ -n "$AK4" ]] && break; sleep 1
+done
+for i in $(seq 1 15); do
+    [[ "$(curl -s -o/dev/null -w'%{http_code}' "http://127.0.0.1:$RH4/health")" == 200 ]] && break
+    sleep 1
+done
+pass "pull relay B (pull2.test) running"
+B4="http://127.0.0.1:${RH4}"
+
+# Seed system B (pull2.test) — mirrors the single-system pull seed
+curl -s -X POST "$B4/api/v1/admin/systems/admin/domains" -H "$H ${AK4}" -H "$J" -d '{"id":"dom-pull2","domain":"pull2.test"}' >/dev/null
+curl -s -X POST "$B4/api/v1/admin/systems/admin/domains" -H "$H ${AK4}" -H "$J" -d '{"id":"dom-tlocal4","domain":"test.local"}' >/dev/null
+for addr in agent@pull2.test agent2@pull2.test cc-agent@pull2.test empty@pull2.test; do
+    curl -s -X POST "$B4/api/v1/admin/systems/admin/addresses" -H "$H ${AK4}" -H "$J" \
+        -d "{\"id\":\"p4-${addr%@*}\",\"email\":\"$addr\"}" >/dev/null
+done
+curl -s -X POST "$B4/api/v1/admin/systems/admin/addresses" -H "$H ${AK4}" -H "$J" \
+    -d '{"id":"p4-sender","email":"sender@test.local"}' >/dev/null
+curl -s -X POST "$B4/api/v1/whitelists" -H "$H ${AK4}" -H "$J" -d '{"system_id":"admin","domain_addr":"pull2.test","direction":"from","value":"*@test.local"}' >/dev/null
+SK4=$(python3 "$SCRIPT_DIR/create_key.py" "$B4/api/v1/api-keys" "$AK4")
+curl -s -X POST "$B4/api/v1/whitelists" -H "$H ${AK4}" -H "$J" -d '{"system_id":"admin","domain_addr":"sender@test.local","direction":"to","value":"*@pull2.test"}' >/dev/null
+for addr in agent@pull2.test agent2@pull2.test cc-agent@pull2.test empty@pull2.test; do
+    curl -s -X POST "$B4/api/v1/whitelists" -H "$H ${AK4}" -H "$J" \
+        -d "{\"system_id\":\"admin\",\"domain_addr\":\"$addr\",\"direction\":\"from\",\"value\":\"*@test.local\"}" >/dev/null
+done
+[[ -n "$SK4" ]] || fail "no system-B pull send key"
+SYSPULL2=$(curl -s -X POST "$B4/api/v1/admin/api-keys" -H "$H ${AK4}" -H "$J" \
+    -d '{"system_id":"admin","email_address":"","scopes":["system"],"category":"system"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('raw_key',''))")
+[[ -n "$SYSPULL2" ]] || fail "no system-B pull system key"
+pass "pull relay B seeded"
+
+# pull2.test routes join the shared route table
+cat >> "$WORK_DIR/bridge/amail_routes.toml" << EOF
+"agent@pull2.test" = "127.0.0.1:${HP}"
+"agent2@pull2.test" = "127.0.0.1:${HP}"
+"cc-agent@pull2.test" = "127.0.0.1:${HP}"
+"empty@pull2.test" = "127.0.0.1:${HP}"
+EOF
+
+# Multi-system bridge: systems array → both gateways, each with its own key
+cat > "$WORK_DIR/bridge/bridge-pull2.toml" << EOF
+addr = "127.0.0.1:${BP3}"
+routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+mode = "pull"
+[pull]
+systems = [
+  { amail_url = "127.0.0.1:${RH2}", admin_key = "${SYSPULL}", system_id = "admin", poll_interval_sec = 2 },
+  { amail_url = "127.0.0.1:${RH4}", admin_key = "${SYSPULL2}", system_id = "admin", poll_interval_sec = 2 },
+]
+[logging]
+level = "info"
+file = "$WORK_DIR/bridge/pull2-bridge.log"
+EOF
+"$BRIDGE_BIN" -c "$WORK_DIR/bridge/bridge-pull2.toml" > "$WORK_DIR/bridge/pull2.log" 2>&1 &
+MBRIDGE_PID=$!; sleep 2
+for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP3}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
+for i in $(seq 1 25); do
+    grep -q "Starting pull loop" "$WORK_DIR/bridge/pull2-bridge.log" 2>/dev/null && break
+    sleep 2
+done
+pass "multi-system bridge running"
+
+S4() { curl -s -X POST "$B4/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: $SK4" "$@"; }
+
+# M-Q1: system A pending → agent@pull.test; system B pending → agent@pull2.test
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"MQ1-A","markdown":"t."}' >/dev/null
+S4 -d '{"sender":"sender@test.local","to":"agent@pull2.test","subject":"MQ1-B","markdown":"t."}' >/dev/null
+n=$(wait_hermes 2); expect "$n" 2 "M-Q1 both systems pulled (A+B)"
+
+# M-Q2: interleaved multi-recipient across both systems
+rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test, agent2@pull.test","subject":"MQ2-A","markdown":"t."}' >/dev/null
+S4 -d '{"sender":"sender@test.local","to":"agent@pull2.test, agent2@pull2.test","subject":"MQ2-B","markdown":"t."}' >/dev/null
+n=$(wait_hermes 4); expect "$n" 4 "M-Q2 4 emails (2 systems x 2 recipients)"
+
+# M-Q3: system isolation — only system B sends, system A gets nothing
+rm -f "$HL"; S4 -d '{"sender":"sender@test.local","to":"agent@pull2.test","subject":"MQ3-B","markdown":"t."}' >/dev/null
+n=$(wait_hermes 1); expect "$n" 1 "M-Q3 system-B only"
+
+# M-Q4: ACK drains both systems' pending queues
+PB4=$(curl -s -X POST "$B4/api/v1/admin/pending" -H "$H ${AK4}" -H "$J" -d '{"limit":50,"filter":["pull2.test"]}' | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('batches',[])))" 2>/dev/null||echo 0)
+sleep 10
+PA4=$(curl -s -X POST "$B4/api/v1/admin/pending" -H "$H ${AK4}" -H "$J" -d '{"limit":50,"filter":["pull2.test"]}' | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('batches',[])))" 2>/dev/null||echo 0)
+[[ "$PA4" -lt "$PB4" || "$PA4" -eq 0 ]] && pass "M-Q4 ACK system-B: $PB4→$PA4" || warn "M-Q4 ACK system-B: $PB4→$PA4"
+
+kill -9 "$GW3_PID" "$MBRIDGE_PID" 2>/dev/null||true; wait "$GW3_PID" "$MBRIDGE_PID" 2>/dev/null||true
 
 echo; echo "═════ Bridge E2E: Complete ═════"

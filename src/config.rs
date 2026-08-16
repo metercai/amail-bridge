@@ -354,6 +354,14 @@ impl BridgeConfig {
         if !cfg.pull.amail_url.contains("://") && !cfg.pull.amail_url.is_empty() {
             cfg.pull.amail_url = format!("http://{}", cfg.pull.amail_url);
         }
+        // Same normalization for each entry of the multi-system array —
+        // otherwise reqwest gets a URL without scheme and the pull loop
+        // dies with "builder error" (AUDIT-2 / e2e M-Q caught this).
+        for sys in &mut cfg.pull.systems {
+            if !sys.amail_url.contains("://") && !sys.amail_url.is_empty() {
+                sys.amail_url = format!("http://{}", sys.amail_url);
+            }
+        }
 
         Ok(cfg)
     }
@@ -526,6 +534,29 @@ systems = [
         assert_eq!(systems[0].effective_key(), "ka");
         assert_eq!(systems[1].poll_interval_sec, 5);
         assert_eq!(systems[1].effective_key(), "kb");
+    }
+
+    #[test]
+    fn test_pull_multi_system_url_normalized() {
+        // systems[] entries without scheme must get http:// (e2e M-Q caught
+        // "builder error" when they didn't — flat amail_url was normalized
+        // but the array entries were not).
+        let path = std::env::temp_dir().join("amail_bridge_norm_test.toml");
+        std::fs::write(&path, r#"
+mode = "pull"
+[pull]
+systems = [
+  { amail_url = "127.0.0.1:39011", admin_key = "ka", system_id = "sys-a" },
+  { amail_url = "https://b.tm", admin_key = "kb", system_id = "sys-b" },
+]
+"#).unwrap();
+        let cfg = BridgeConfig::load(Some(&path)).unwrap();
+        std::fs::remove_file(&path).ok();
+        let systems = cfg.pull.resolved_systems();
+        assert_eq!(systems[0].amail_url, "http://127.0.0.1:39011",
+                   "scheme-less entry gets http:// prefix");
+        assert_eq!(systems[1].amail_url, "https://b.tm",
+                   "entry with explicit scheme untouched");
     }
 
     #[test]
