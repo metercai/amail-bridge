@@ -421,6 +421,17 @@ async fn acme_tls_config(
     let challenge_path = config.acme_challenge_path.as_deref().and_then(|p| p.to_str());
     let email = config.acme_email.as_deref();
 
+    // Pre-flight: if a challenge_path is configured it must be writable,
+    // otherwise the HTTP-01 flow would fail mid-order (challenge written
+    // only at set_ready time). Fail fast here instead (AUDIT-2).
+    if let Some(dir) = challenge_path {
+        let well_known = std::path::Path::new(dir).join(".well-known").join("acme-challenge");
+        std::fs::create_dir_all(&well_known)?;
+        let probe = well_known.join(".acme_probe");
+        std::fs::write(&probe, b"1")?;
+        let _ = std::fs::remove_file(&probe);
+    }
+
     let (paths, _stop) = crate::acme::get_or_acquire_cert(
         domain,
         &cache_dir,
@@ -434,7 +445,7 @@ async fn acme_tls_config(
     // dropped here — the bridge runs until SIGTERM, and on exit the renew
     // task exits with the process. (Full clean-shutdown wiring would need
     // the stop token plumbed to the signal handler; acceptable for now.)
-    push::build_tls_config_from_paths(&paths.cert, &paths.key).map_err(Into::into)
+    push::build_tls_config_from_paths(&paths.cert, &paths.key)
 }
 
 /// Start a plain HTTP server with graceful shutdown.

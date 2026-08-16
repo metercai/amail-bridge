@@ -16,6 +16,10 @@ HL="$WORK_DIR/hermes.log"; H="X-Api-Key:"; J="Content-Type: application/json"
 BASE="http://127.0.0.1"
 
 cleanup() {
+    cp "$WORK_DIR/relay.log" "/tmp/e2e-relay.log" 2>/dev/null || true
+    cp "$WORK_DIR/relay2.log" "/tmp/e2e-relay2.log" 2>/dev/null || true
+    cp "$WORK_DIR/bridge/push-bridge.log" "/tmp/e2e-push-bridge.log" 2>/dev/null || true
+    cp "$WORK_DIR/bridge/pull-bridge.log" "/tmp/e2e-pull-bridge.log" 2>/dev/null || true
     for pid in "${RELAY_PID:-}" "${BRIDGE_PID:-}" "${HERMES_PID:-}"; do
         [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null || true
     done; wait 2>/dev/null || true; rm -rf "$WORK_DIR"
@@ -47,6 +51,7 @@ echo; echo "=== 1. Push Relay ==="
 cat > "$WORK_DIR/relay.toml" << EOF
 [smtp]
 bind = "127.0.0.1:${RS}"
+hostname = "relay.local"
 [http]
 bind = "127.0.0.1:${RH}"
 [storage]
@@ -72,9 +77,19 @@ for addr in agent@bridge.test agent2@bridge.test cc-agent@bridge.test empty@brid
     curl -s -X POST "$B/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
         -d "{\"id\":\"a-${addr%@*}\",\"email\":\"$addr\",\"webhook_url\":\"$BASE:${BP}/webhooks/bridge\"}" >/dev/null
 done
-curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' >/dev/null
+# sender@test.local must be registered for send's whitelist/domain resolution
+curl -s -X POST "$B/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
+    -d '{"id":"a-sender","email":"sender@test.local"}' >/dev/null
+# Outbound whitelist (sender's to-rule) + inbound whitelist (recipient's
+# from-rule) — both address-level: gateway matches full addresses
+# (ExactKeyResolver, send.rs steps 4 & 6).
+curl -s -X POST "$B/api/v1/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"bridge.test","direction":"from","value":"*@test.local"}' >/dev/null
 SK=$(python3 "$SCRIPT_DIR/create_key.py" "$B/api/v1/api-keys" "$AK")
-curl -s -X POST "$B/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@bridge.test"}' >/dev/null
+curl -s -X POST "$B/api/v1/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"sender@test.local","direction":"to","value":"*@bridge.test"}' >/dev/null
+for addr in agent@bridge.test agent2@bridge.test cc-agent@bridge.test empty@bridge.test; do
+    curl -s -X POST "$B/api/v1/whitelists" -H "$H ${AK}" -H "$J" \
+        -d "{\"system_id\":\"admin\",\"domain_addr\":\"$addr\",\"direction\":\"from\",\"value\":\"*@test.local\"}" >/dev/null
+done
 [[ -n "$SK" ]] || fail "no send key"
 pass "seeded"
 
@@ -103,7 +118,7 @@ EOF
 # ═══════════════════════════════════
 echo; echo "═════ PUSH TESTS ═════"
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
-bind = "127.0.0.1:${BP}"
+addr = "127.0.0.1:${BP}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "push"
 [push]
@@ -117,7 +132,7 @@ BRIDGE_PID=$!; sleep 2
 for i in $(seq 1 10); do [[ "$(curl -s -o/dev/null -w'%{http_code}' "$BASE:${BP}/health" 2>/dev/null)" == 200 ]] && break; sleep 1; done
 pass "bridge push running"
 
-S() { local code=$(curl -s -w "%{http_code}" -o /dev/null -X POST "$B/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK}" "$@" 2>/dev/null); echo "SEND: $code"; }
+S() { local code=$(curl -s -w "%{http_code}" -o /dev/null -X POST "$B/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: $SK" "$@" 2>/dev/null); echo "SEND: $code" >&2; }
 
 # P1: single
 rm -f "$HL"; S -d '{"sender":"sender@test.local","to":"agent@bridge.test","subject":"P1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); expect "$n" 1 "P-1 single"
@@ -151,6 +166,7 @@ rm -rf "$WORK_DIR/relay-data"; mkdir -p "$WORK_DIR/relay-data"
 cat > "$WORK_DIR/relay2.toml" << EOF
 [smtp]
 bind = "127.0.0.1:${RS2}"
+hostname = "relay2.local"
 [http]
 bind = "127.0.0.1:${RH2}"
 [storage]
@@ -171,19 +187,35 @@ for addr in agent@pull.test agent2@pull.test cc-agent@pull.test empty@pull.test;
     curl -s -X POST "$B2/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
         -d "{\"id\":\"pa-${addr%@*}\",\"email\":\"$addr\"}" >/dev/null
 done
-curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' >/dev/null
+# sender@test.local must be registered for send's whitelist/domain resolution
+curl -s -X POST "$B2/api/v1/admin/systems/admin/addresses" -H "$H ${AK}" -H "$J" \
+    -d '{"id":"pa-sender","email":"sender@test.local"}' >/dev/null
+curl -s -X POST "$B2/api/v1/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"pull.test","direction":"from","value":"*@test.local"}' >/dev/null
 SK2=$(python3 "$SCRIPT_DIR/create_key.py" "$B2/api/v1/api-keys" "$AK")
-curl -s -X POST "$B2/api/v1/admin/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"test.local","direction":"to","value":"*@pull.test"}' >/dev/null
+# to-rule must be address-level (sender@test.local) — gateway's whitelist
+# resolver matches the sender's full address (ExactKeyResolver)
+curl -s -X POST "$B2/api/v1/whitelists" -H "$H ${AK}" -H "$J" -d '{"system_id":"admin","domain_addr":"sender@test.local","direction":"to","value":"*@pull.test"}' >/dev/null
+for addr in agent@pull.test agent2@pull.test cc-agent@pull.test empty@pull.test; do
+    curl -s -X POST "$B2/api/v1/whitelists" -H "$H ${AK}" -H "$J" \
+        -d "{\"system_id\":\"admin\",\"domain_addr\":\"$addr\",\"direction\":\"from\",\"value\":\"*@test.local\"}" >/dev/null
+done
 [[ -n "$SK2" ]] || fail "no pull send key"
 pass "pull relay seeded"
 
+# Pull bridge needs a system-scope key whose system_id matches the pending
+# records ("admin" — the bootstrap admin key is bound to the real system id
+# system-xxx and would filter everything out).
+SYSPULL=$(curl -s -X POST "$B2/api/v1/admin/api-keys" -H "$H ${AK}" -H "$J" \
+    -d '{"system_id":"admin","email_address":"","scopes":["system"],"category":"system"}' | python3 -c "import sys,json;print(json.load(sys.stdin).get('raw_key',''))")
+[[ -n "$SYSPULL" ]] || fail "no pull system key"
+
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
-bind = "127.0.0.1:${BP2}"
+addr = "127.0.0.1:${BP2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]
 amail_url = "127.0.0.1:${RH2}"
-admin_key = "${AK}"
+admin_key = "${SYSPULL}"
 system_id = "admin"
 poll_interval_sec = 2
 [logging]
@@ -199,7 +231,7 @@ for i in $(seq 1 25); do
     grep -q "Starting pull loop" "$WORK_DIR/bridge/pull-bridge.log" 2>/dev/null && break
     sleep 2
 done
-S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: ${SK2}" "$@"; }
+S2() { curl -s -X POST "$B2/api/v1/send" -H "Content-Type: application/json" -H "X-Api-Key: $SK2" "$@"; }
 
 # Q1: single
 rm -f "$HL"; S2 -d '{"sender":"sender@test.local","to":"agent@pull.test","subject":"Q1-Single","markdown":"test."}' >/dev/null; n=$(wait_hermes 1); [[ "$n" -ge 1 ]] && pass "Q-1 single: $n OK" || warn "Q-1 single: $n"

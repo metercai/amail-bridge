@@ -3,6 +3,10 @@
 import sys, json, urllib.request
 
 url, admin_key = sys.argv[1], sys.argv[2]
+# Gateway moved key creation to /api/v1/admin/api-keys (amail-gateway
+# http.rs). The caller passes the base URL; append the admin path here.
+if url.endswith("/api/v1/api-keys"):
+    url = url.replace("/api/v1/api-keys", "/api/v1/admin/api-keys")
 data = json.dumps({
     "system_id": "admin",
     "email_address": "sender@test.local",

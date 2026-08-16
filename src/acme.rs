@@ -159,8 +159,11 @@ async fn acquire_cert_inner(
                 None,
             )
             .await?;
-        // Persist account credentials for future renewals
+        // Persist account credentials for future renewals.
+        // Lock down permissions too — account.json contains the ACME
+        // account private key (AUDIT-2: was world-readable by default).
         std::fs::write(&credentials_path, serde_json::to_string_pretty(&credentials)?)?;
+        set_key_permissions(&credentials_path)?;
         account
     };
 

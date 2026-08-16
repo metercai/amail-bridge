@@ -98,7 +98,7 @@ impl BridgeConfig {
     }
 
     /// Returns true if TLS should be enabled (hostname is a domain, not IP).
-    #[allow(dead_code)]
+    /// Used by main.rs TLS branch (static certs OR ACME when domain).
     pub fn has_tls(&self) -> bool {
         self.hostname.as_ref().map_or(false, |h| !is_ip_address(h))
     }
