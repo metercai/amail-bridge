@@ -406,7 +406,10 @@ async fn handle_batch_webhook(
 
 /// Build a rustls TLS config from PEM cert + key files.
 /// Used when `tls_cert` and `tls_key` are both configured (static certs).
-pub fn build_tls_config_from_paths(cert_path: &std::path::Path, key_path: &std::path::Path) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error>> {
+pub fn build_tls_config_from_paths(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::BufReader;
     let cert_file = std::fs::File::open(cert_path)?;
     let key_file = std::fs::File::open(key_path)?;

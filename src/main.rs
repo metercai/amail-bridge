@@ -18,6 +18,7 @@ mod config;
 mod pull;
 mod push;
 mod router;
+mod acme;
 mod vhost;
 mod security;
 mod admin;
@@ -299,7 +300,8 @@ async fn async_main(
 
     // TLS setup for push-mode inbound HTTPS (AUDIT-1, user requirement):
     // hostname is a domain → try static certs (tls_cert + tls_key),
-    // else ACME (planned) — fall back to plain HTTP with a warning.
+    // else ACME auto-cert (Let's Encrypt, HTTP-01) — fall back to plain
+    // HTTP with a warning if both fail.
     let tls_config: Option<axum_server::tls_rustls::RustlsConfig> = if config.mode == "push"
         && config.has_tls()
     {
@@ -315,10 +317,19 @@ async fn async_main(
                 }
             }
         } else {
-            tracing::warn!(
-                "hostname is a domain but tls_cert/tls_key not set — ACME auto-cert is planned but not yet wired; serving plain HTTP"
-            );
-            None
+            // No static certs — try ACME auto-cert (referenced from
+            // amail-advanced's acme.rs implementation).
+            match acme_tls_config(&config).await {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "ACME auto-cert failed — serving plain HTTP (hostname: {:?})",
+                        config.hostname
+                    );
+                    None
+                }
+            }
         }
     } else {
         None
@@ -375,6 +386,55 @@ async fn async_main(
     }
 
     Ok(())
+}
+
+/// Try to build a TLS config via ACME auto-cert (Let's Encrypt HTTP-01).
+///
+/// Flow (mirrors amail-advanced):
+/// 1. cache dir = acme_cache or ~/.acme_cache
+/// 2. existing cert < 60 days old → reuse
+/// 3. else acquire via HTTP-01 (challenge_path → external server writes,
+///    otherwise bridge's built-in port-80 listener)
+/// 4. background renew task handles rotation
+async fn acme_tls_config(
+    config: &crate::config::BridgeConfig,
+) -> Result<axum_server::tls_rustls::RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    let domain = config
+        .hostname
+        .as_deref()
+        .ok_or("ACME requires hostname (domain)")?;
+
+    // Resolve cache dir to absolute — survives CWD changes after daemonize
+    let cache_dir = match &config.acme_cache {
+        Some(p) => {
+            if p.is_absolute() {
+                p.clone()
+            } else {
+                std::env::current_dir()?.join(p)
+            }
+        }
+        None => dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".acme_cache"),
+    };
+
+    let challenge_path = config.acme_challenge_path.as_deref().and_then(|p| p.to_str());
+    let email = config.acme_email.as_deref();
+
+    let (paths, _stop) = crate::acme::get_or_acquire_cert(
+        domain,
+        &cache_dir,
+        email,
+        challenge_path,
+        None, // registry mode not used by bridge (single port)
+    )
+    .await?;
+
+    // NOTE: the renew task keeps running; its stop token is intentionally
+    // dropped here — the bridge runs until SIGTERM, and on exit the renew
+    // task exits with the process. (Full clean-shutdown wiring would need
+    // the stop token plumbed to the signal handler; acceptable for now.)
+    push::build_tls_config_from_paths(&paths.cert, &paths.key).map_err(Into::into)
 }
 
 /// Start a plain HTTP server with graceful shutdown.

@@ -30,10 +30,20 @@ pub struct BridgeConfig {
     pub tls_key: Option<PathBuf>,
 
     /// ACME certificate cache directory. Defaults to ~/.acme_cache/
-    /// (ACME auto-cert is planned but not yet wired — field reserved).
+    /// (used when hostname is a domain and no static tls_cert/tls_key).
     #[serde(default)]
-    #[allow(dead_code)]
     pub acme_cache: Option<PathBuf>,
+
+    /// Contact email for ACME account registration (optional; Let's Encrypt
+    /// uses it for expiry notices). When unset, a placeholder is used.
+    #[serde(default)]
+    pub acme_email: Option<String>,
+
+    /// Directory where ACME HTTP-01 challenge proofs are written for an
+    /// external HTTP server (nginx/caddy on port 80). When unset, the
+    /// bridge starts a temporary listener on port 80 itself.
+    #[serde(default)]
+    pub acme_challenge_path: Option<PathBuf>,
 
     /// Allowed source IPs/CIDRs for admin API access.
     /// Requests to /health and /api/v1/* from other IPs get 403.
