@@ -120,7 +120,7 @@ EOF
 # ═══════════════════════════════════
 echo; echo "═════ PUSH TESTS ═════"
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
-addr = "127.0.0.1:${BP}"
+bind = "127.0.0.1:${BP}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "push"
 [push]
@@ -294,7 +294,7 @@ SYSPULL=$(curl -s -X POST "$B2/api/v1/admin/api-keys" -H "$H ${AK}" -H "$J" \
 [[ -n "$SYSPULL" ]] || fail "no pull system key"
 
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
-addr = "127.0.0.1:${BP2}"
+bind = "127.0.0.1:${BP2}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]
@@ -407,7 +407,7 @@ EOF
 
 # Multi-system bridge: systems array → both gateways, each with its own key
 cat > "$WORK_DIR/bridge/bridge-pull2.toml" << EOF
-addr = "127.0.0.1:${BP3}"
+bind = "127.0.0.1:${BP3}"
 routes_file = "$WORK_DIR/bridge/amail_routes.toml"
 mode = "pull"
 [pull]

@@ -296,7 +296,7 @@ async fn async_main(
 
     let app = crate::security::apply_security_headers(app);
 
-    let sock_addr: std::net::SocketAddr = config.addr.parse()?;
+    let sock_addr: std::net::SocketAddr = config.bind.parse()?;
 
     // TLS setup for push-mode inbound HTTPS (AUDIT-1, user requirement):
     // hostname is a domain → try static certs (tls_cert + tls_key),

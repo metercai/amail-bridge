@@ -12,8 +12,10 @@ pub struct BridgeConfig {
 
     /// Listen address in "host:port" format (e.g. "0.0.0.0:38080").
     /// Used for admin API (/health, /api/v1/routes) and push webhooks.
-    #[serde(default = "default_listen_addr")]
-    pub addr: String,
+    /// `bind` is the canonical name (aligned with amail-gateway/advanced);
+    /// legacy `addr` key still parses via serde alias.
+    #[serde(default = "default_listen_bind", alias = "addr")]
+    pub bind: String,
 
     /// Public hostname or IP:port announced to gateway (promoted from push.hostname).
     /// - domain:port → TLS enabled (ACME or static cert)
@@ -87,14 +89,14 @@ pub struct BridgeConfig {
 }
 
 impl BridgeConfig {
-    /// Parse `addr` into (host, port). Default port: 80.
-    pub fn parsed_addr(&self) -> (&str, u16) {
-        if let Some((host, port_str)) = self.addr.rsplit_once(':') {
+    /// Parse `bind` into (host, port). Default port: 80.
+    pub fn parsed_bind(&self) -> (&str, u16) {
+        if let Some((host, port_str)) = self.bind.rsplit_once(':') {
             if let Ok(port) = port_str.parse::<u16>() {
                 return (host, port);
             }
         }
-        (&self.addr, 80)
+        (&self.bind, 80)
     }
 
     /// Returns true if TLS should be enabled (hostname is a domain, not IP).
@@ -104,9 +106,9 @@ impl BridgeConfig {
     }
 
     /// True when dual-port mode (80 → 443 redirect) is active.
-    /// Conditions: addr port == 80 AND hostname is a domain (not IP).
+    /// Conditions: bind port == 80 AND hostname is a domain (not IP).
     pub fn is_dual_port(&self) -> bool {
-        let (_, port) = self.parsed_addr();
+        let (_, port) = self.parsed_bind();
         port == 80 && self.hostname.as_ref().map_or(false, |h| !is_ip_address(h))
     }
 }
@@ -288,7 +290,7 @@ impl Default for HealthConfig {
 
 // Default helpers
 fn default_mode() -> String { "push".into() }
-fn default_listen_addr() -> String { "0.0.0.0:38080".into() }
+fn default_listen_bind() -> String { "0.0.0.0:38080".into() }
 fn default_poll_interval() -> u64 { 10 }
 fn default_log_level() -> String { "info".into() }
 fn default_health_check_interval() -> u64 { 60 }
@@ -404,7 +406,7 @@ admin_key = "k"
 system_id = "s"
 "#).unwrap();
         assert_eq!(cfg.mode, "pull");
-        assert_eq!(cfg.addr, "0.0.0.0:38080");
+        assert_eq!(cfg.bind, "0.0.0.0:38080");
         assert_eq!(cfg.admin_allowed_ips, vec!["127.0.0.1", "::1"], "D1: admin API defaults to localhost-only");
         assert_eq!(cfg.push.body_limit_mb, 20);
         assert_eq!(cfg.push.rate_limit, 30);
@@ -412,23 +414,33 @@ system_id = "s"
     }
 
     #[test]
-    fn test_addr_with_port() {
+    fn test_legacy_addr_alias() {
+        // Pre-0.6.2 configs used `addr`; serde alias keeps them working.
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
 addr = "127.0.0.1:8080"
 "#).unwrap();
-        let (host, port) = cfg.parsed_addr();
+        assert_eq!(cfg.bind, "127.0.0.1:8080", "legacy addr key maps to bind");
+    }
+
+    #[test]
+    fn test_bind_with_port() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "push"
+bind = "127.0.0.1:8080"
+"#).unwrap();
+        let (host, port) = cfg.parsed_bind();
         assert_eq!(host, "127.0.0.1");
         assert_eq!(port, 8080);
     }
 
     #[test]
-    fn test_addr_default_port() {
+    fn test_bind_default_port() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-addr = "0.0.0.0"
+bind = "0.0.0.0"
 "#).unwrap();
-        let (host, port) = cfg.parsed_addr();
+        let (host, port) = cfg.parsed_bind();
         assert_eq!(host, "0.0.0.0");
         assert_eq!(port, 80);
     }
@@ -437,7 +449,7 @@ addr = "0.0.0.0"
     fn test_dual_port_detection() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-addr = "0.0.0.0:80"
+bind = "0.0.0.0:80"
 hostname = "example.com"
 "#).unwrap();
         assert!(cfg.is_dual_port());
@@ -447,7 +459,7 @@ hostname = "example.com"
     fn test_push_config_with_limits() {
         let cfg: BridgeConfig = toml::from_str(r#"
 mode = "push"
-addr = "0.0.0.0:8080"
+bind = "0.0.0.0:8080"
 admin_allowed_ips = ["10.0.0.0/8"]
 hostname = "bridge.example.com"
 [push]
@@ -456,7 +468,7 @@ allowed_ips = ["10.0.0.0/8"]
 rate_limit = 100
 body_limit_mb = 50
 "#).unwrap();
-        assert_eq!(cfg.addr, "0.0.0.0:8080");
+        assert_eq!(cfg.bind, "0.0.0.0:8080");
         assert_eq!(cfg.admin_allowed_ips, vec!["10.0.0.0/8"]);
         assert_eq!(cfg.push.rate_limit, 100);
         assert_eq!(cfg.push.body_limit_mb, 50);
