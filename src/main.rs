@@ -309,45 +309,32 @@ async fn async_main(
         let srv_task = start_http(app, sock_addr, shutdown.clone());
         // One pull loop per configured system (multi-system support).
         // Each loop has its own API key, system_id, dedup cache and backoff.
-        // Futures are joined directly (not spawned) so errors propagate.
-        let mut pull_futs: Vec<_> = config
-            .pull
-            .resolved_systems()
-            .into_iter()
-            .map(|sys| {
-                let r = router.clone();
-                let sd = shutdown.clone();
-                Box::pin(pull::start_pull_loop(sys, r, sd))
-            })
-            .collect();
-        let mut srv_fut = Box::pin(srv_task);
-        // Concurrently run server + all pull loops; record the first error.
-        // Arc<Mutex<Option<String>>> avoids borrow conflicts between the
-        // joined branches (errors are stringified — join! branches are not
-        // Send-bound, but keeping the cell Send-safe is free).
+        // Loops are spawned as independent tasks so they run CONCURRENTLY
+        // (sequentially awaiting infinite loops would starve all but the first).
         let first_err = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-        let fe_srv = first_err.clone();
-        let fe_pull = first_err.clone();
-        let fe_after = first_err.clone();
-        let _ = tokio::join!(
-            async move {
-                if let Err(e) = (&mut srv_fut).await {
-                    *fe_srv.lock().unwrap() = Some(e.to_string());
-                }
-            },
-            async move {
-                for fut in pull_futs.iter_mut() {
-                    if let Err(e) = fut.await {
-                        let mut guard = fe_pull.lock().unwrap();
-                        if guard.is_none() {
-                            *guard = Some(e.to_string());
-                        }
+        let mut pull_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+        for sys in config.pull.resolved_systems() {
+            let r = router.clone();
+            let sd = shutdown.clone();
+            let fe = first_err.clone();
+            pull_handles.push(tokio::spawn(async move {
+                if let Err(e) = pull::start_pull_loop(sys, r, sd).await {
+                    let mut guard = fe.lock().unwrap();
+                    if guard.is_none() {
+                        *guard = Some(e.to_string());
                     }
                 }
-            },
-        );
+            }));
+        }
+        let mut srv_fut = Box::pin(srv_task);
+        if let Err(e) = (&mut srv_fut).await {
+            *first_err.lock().unwrap() = Some(e.to_string());
+        }
+        for handle in pull_handles {
+            let _ = handle.await;
+        }
         let err_msg: Option<String> = {
-            let mut guard = fe_after.lock().unwrap();
+            let mut guard = first_err.lock().unwrap();
             guard.take()
         };
         if let Some(msg) = err_msg {

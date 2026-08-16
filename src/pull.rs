@@ -24,7 +24,7 @@ pub async fn start_pull_loop(
     pull_cfg: PullSystemConfig,
     router: Arc<ProfileRouter>,
     shutdown: Arc<AtomicBool>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = PullState {
         router: router.clone(),
         http_client: reqwest::Client::builder()
@@ -191,7 +191,7 @@ struct BatchDelivery {
 }
 
 /// Fetch pending deliveries from relay (batched response).  Returns empty vec if no routes.
-async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn std::error::Error>> {
+async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn std::error::Error + Send + Sync>> {
     let emails: Vec<String> = state.router.list_emails();
     if emails.is_empty() {
         return Ok(Vec::new());
@@ -234,7 +234,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
 }
 
 /// ACK deliveries back to relay.
-async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn std::error::Error>> {
+async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
         "{}/api/v1/admin/pending/ack",
         state.pull_cfg.amail_url.trim_end_matches('/'),
