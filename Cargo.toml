@@ -1,6 +1,6 @@
 [package]
 name = "amail-bridge"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 license = "GPL-3.0-only"
 description = "Transparent bridge between amail relay and Hermes gateway"
