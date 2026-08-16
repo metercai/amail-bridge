@@ -31,12 +31,44 @@ pub struct ProfileRoute {
     pub host: String,
     pub port: u16,
     /// Cached target URL — computed once, reused for all lookups.
+    /// Either a full URL (registered via API / routes file) or
+    /// `http://{host}:{port}/webhooks/amail-inbound` when only host:port
+    /// was given (legacy default path).
     target_url: String,
 }
 
 impl ProfileRoute {
     pub fn target_url(&self) -> &str {
         &self.target_url
+    }
+
+    /// Build a route from a full URL (scheme://host[:port][/path]).
+    /// The path is preserved verbatim — no `/webhooks/amail-inbound`
+    /// suffix is appended, so agent endpoints with custom paths
+    /// (e.g. OpenClaw `/hook`) work unchanged.
+    fn from_url(email: String, url: &str) -> Self {
+        // Parse scheme://host[:port][/path] without pulling in a URL crate.
+        let url = url.trim();
+        let rest = if let Some(s) = url.strip_prefix("http://") { s }
+            else if let Some(s) = url.strip_prefix("https://") { s }
+            else { url }; // bare host:port/path → treat as http
+        let (authority, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        // IPv6 literal [::1]:port or host:port
+        let (host, port) = if let Some(b) = authority.strip_prefix('[') {
+            match b.split_once("]:") {
+                Some((h, p)) => (format!("[{}]", h), p.parse::<u16>().unwrap_or(80)),
+                None => (format!("[{}]", b.trim_end_matches(']')), 80),
+            }
+        } else if let Some((h, p)) = authority.rsplit_once(':') {
+            (h.to_string(), p.parse::<u16>().unwrap_or(80))
+        } else {
+            (authority.to_string(), 80)
+        };
+        let target_url = format!("http://{}{}", authority, path);
+        Self { email, host, port, target_url }
     }
 
     fn new(email: String, host: String, port: u16) -> Self {
@@ -162,14 +194,20 @@ impl ProfileRouter {
 
         let mut overrides = HashMap::new();
         for (key, value) in parsed {
-            let (host, port) = match Self::parse_addr(&value) {
-                Some(r) => r,
-                None => {
-                    tracing::warn!(key = %key, value = %value, "Invalid 'host:port' in routes file — skipping");
-                    continue;
+            let value = value.trim();
+            // Full URL (with path) → use verbatim; bare host:port → legacy default path
+            let route = if value.contains('/') || value.contains("://") {
+                ProfileRoute::from_url(key.clone(), value)
+            } else {
+                match Self::parse_addr(value) {
+                    Some((host, port)) => ProfileRoute::new(key.clone(), host, port),
+                    None => {
+                        tracing::warn!(key = %key, value = %value, "Invalid 'host:port' in routes file — skipping");
+                        continue;
+                    }
                 }
             };
-            overrides.insert(key.clone(), ProfileRoute::new(key, host, port));
+            overrides.insert(key.clone(), route);
         }
 
         overrides
@@ -207,9 +245,17 @@ impl ProfileRouter {
     }
 
     /// Add or update a route for an exact email, then persist to file.
-    pub fn update_route(&self, email: &str, host: &str, port: u16) {
+    /// `host_or_url` accepts either a full URL (`http://host:port/path`,
+    /// path preserved verbatim) or a bare `host:port` (legacy default
+    /// `/webhooks/amail-inbound` path).
+    pub fn update_route(&self, email: &str, host_or_url: &str, port: u16) {
+        let route = if host_or_url.contains('/') || host_or_url.contains("://") {
+            ProfileRoute::from_url(email.into(), host_or_url)
+        } else {
+            ProfileRoute::new(email.into(), host_or_url.into(), port)
+        };
         let mut routes = self.routes.write().unwrap_or_else(|e| e.into_inner());
-        routes.insert(email.into(), ProfileRoute::new(email.into(), host.into(), port));
+        routes.insert(email.into(), route);
         drop(routes);
         self.write_current_routes();
     }
@@ -253,10 +299,17 @@ impl ProfileRouter {
         keys.sort();
         for email in keys {
             if let Some(route) = routes.get(email) {
-                out.push_str(&format!(
-                    "\"{}\" = \"{}:{}\"\n",
-                    email, route.host, route.port
-                ));
+                // Persist the full target URL when it carries a custom path
+                // (not the legacy /webhooks/amail-inbound default), so
+                // restarts keep exact endpoint paths.
+                let value = if route.target_url.ends_with("/webhooks/amail-inbound")
+                    && route.target_url.starts_with(&format!("http://{}:{}", route.host, route.port))
+                {
+                    format!("{}:{}", route.host, route.port)
+                } else {
+                    route.target_url.clone()
+                };
+                out.push_str(&format!("\"{}\" = \"{}\"\n", email, value));
             }
         }
         if let Err(e) = std::fs::write(path, &out) {
@@ -333,6 +386,7 @@ pub fn start_routes_watcher(router: Arc<ProfileRouter>) -> notify::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn write_routes_file(path: &Path, content: &str) {
         std::fs::write(path, content).unwrap();
@@ -427,5 +481,54 @@ mod tests {
         let content = std::fs::read_to_string(&routes_file).unwrap();
         assert!(content.contains("alice@x.com"));
         assert!(content.contains("127.0.0.1:8645"));
+    }
+
+    #[test]
+    fn test_route_from_full_url_preserves_path() {
+        let route = ProfileRoute::from_url(
+            "alice@x.com".into(),
+            "http://127.0.0.1:8799/hook",
+        );
+        assert_eq!(route.target_url(), "http://127.0.0.1:8799/hook");
+        assert_eq!(route.host, "127.0.0.1");
+        assert_eq!(route.port, 8799);
+    }
+
+    #[test]
+    fn test_route_from_full_url_no_port() {
+        let route = ProfileRoute::from_url(
+            "bob@x.com".into(),
+            "http://10.0.0.5/webhooks/agentmail-inbound",
+        );
+        assert_eq!(route.target_url(), "http://10.0.0.5/webhooks/agentmail-inbound");
+        assert_eq!(route.host, "10.0.0.5");
+        assert_eq!(route.port, 80);
+    }
+
+    #[test]
+    fn test_load_full_url_routes_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let routes_file = tmp.path().join("amail_routes.toml");
+        write_routes_file(&routes_file,
+            "\"a1@t.local\" = \"http://127.0.0.1:8799/hook\"\n\"a2@t.local\" = \"127.0.0.1:8002\"\n");
+        let router = ProfileRouter::new(routes_file.clone());
+        router.load_from_file();
+        let r1 = router.lookup("a1@t.local").unwrap();
+        assert_eq!(r1.target_url(), "http://127.0.0.1:8799/hook", "full URL path preserved");
+        let r2 = router.lookup("a2@t.local").unwrap();
+        assert_eq!(r2.target_url(), "http://127.0.0.1:8002/webhooks/amail-inbound",
+            "bare host:port falls back to legacy path");
+    }
+
+    #[test]
+    fn test_route_api_persists_full_url() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let routes_file = tmp.path().join("amail_routes.toml");
+        let router = ProfileRouter::new(routes_file.clone());
+        router.update_route("c1@t.local", "http://127.0.0.1:8799/hook", 0);
+        let content = std::fs::read_to_string(&routes_file).unwrap();
+        assert!(content.contains("\"http://127.0.0.1:8799/hook\""), "full URL persisted: {}", content);
+        let r = router.lookup("c1@t.local").unwrap();
+        assert_eq!(r.target_url(), "http://127.0.0.1:8799/hook");
     }
 }

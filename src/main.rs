@@ -307,8 +307,52 @@ async fn async_main(
             health::start_route_health(health_router, health_config, health_shutdown).await;
         });
         let srv_task = start_http(app, sock_addr, shutdown.clone());
-        let pull_task = pull::start_pull_loop(config, router, shutdown);
-        tokio::try_join!(srv_task, pull_task)?;
+        // One pull loop per configured system (multi-system support).
+        // Each loop has its own API key, system_id, dedup cache and backoff.
+        // Futures are joined directly (not spawned) so errors propagate.
+        let mut pull_futs: Vec<_> = config
+            .pull
+            .resolved_systems()
+            .into_iter()
+            .map(|sys| {
+                let r = router.clone();
+                let sd = shutdown.clone();
+                Box::pin(pull::start_pull_loop(sys, r, sd))
+            })
+            .collect();
+        let mut srv_fut = Box::pin(srv_task);
+        // Concurrently run server + all pull loops; record the first error.
+        // Arc<Mutex<Option<String>>> avoids borrow conflicts between the
+        // joined branches (errors are stringified — join! branches are not
+        // Send-bound, but keeping the cell Send-safe is free).
+        let first_err = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let fe_srv = first_err.clone();
+        let fe_pull = first_err.clone();
+        let fe_after = first_err.clone();
+        let _ = tokio::join!(
+            async move {
+                if let Err(e) = (&mut srv_fut).await {
+                    *fe_srv.lock().unwrap() = Some(e.to_string());
+                }
+            },
+            async move {
+                for fut in pull_futs.iter_mut() {
+                    if let Err(e) = fut.await {
+                        let mut guard = fe_pull.lock().unwrap();
+                        if guard.is_none() {
+                            *guard = Some(e.to_string());
+                        }
+                    }
+                }
+            },
+        );
+        let err_msg: Option<String> = {
+            let mut guard = fe_after.lock().unwrap();
+            guard.take()
+        };
+        if let Some(msg) = err_msg {
+            return Err(msg.into());
+        }
     } else {
         // Plain HTTP server
         start_http(app, sock_addr, shutdown.clone()).await?;

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config::BridgeConfig;
+use crate::config::PullSystemConfig;
 use crate::router::ProfileRouter;
 
 /// Application state shared across pull tasks.
@@ -16,12 +16,12 @@ use crate::router::ProfileRouter;
 pub struct PullState {
     pub router: Arc<ProfileRouter>,
     pub http_client: reqwest::Client,
-    pub config: BridgeConfig,
+    pub pull_cfg: PullSystemConfig,
 }
 
 /// Main pull loop: poll → forward → ACK, with dedup cache.
 pub async fn start_pull_loop(
-    config: BridgeConfig,
+    pull_cfg: PullSystemConfig,
     router: Arc<ProfileRouter>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,21 +30,21 @@ pub async fn start_pull_loop(
         http_client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?,
-        config: config.clone(),
+        pull_cfg: pull_cfg.clone(),
     };
 
     let mut seen: HashMap<i64, Instant> = HashMap::new();
     let seen_ttl = Duration::from_secs(7200);
-    let poll_interval = config.pull.poll_interval_sec;
+    let poll_interval = pull_cfg.poll_interval_sec;
     let mut consecutive_failures: u32 = 0;
     let mut consecutive_ack_failures: u32 = 0;
     const MAX_BACKOFF: u64 = 300; // 5 min
     const ACK_FAIL_WARN_THRESHOLD: u32 = 10;
 
     tracing::info!(
-        amail_url = %config.pull.amail_url,
-        system_id = %config.pull.system_id,
-        poll_interval_sec = config.pull.poll_interval_sec,
+        amail_url = %pull_cfg.amail_url,
+        system_id = %pull_cfg.system_id,
+        poll_interval_sec = pull_cfg.poll_interval_sec,
         "Starting pull loop"
     );
 
@@ -207,7 +207,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
 
     let url = format!(
         "{}/api/v1/admin/pending",
-        state.config.pull.amail_url.trim_end_matches('/'),
+        state.pull_cfg.amail_url.trim_end_matches('/'),
     );
     let body = serde_json::json!({
         "limit": 50,
@@ -217,7 +217,7 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
     let resp = state
         .http_client
         .post(&url)
-        .header("X-Api-Key", state.config.pull.effective_key())
+        .header("X-Api-Key", state.pull_cfg.effective_key())
         .json(&body)
         .send()
         .await?
@@ -237,13 +237,13 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
 async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn std::error::Error>> {
     let url = format!(
         "{}/api/v1/admin/pending/ack",
-        state.config.pull.amail_url.trim_end_matches('/'),
+        state.pull_cfg.amail_url.trim_end_matches('/'),
     );
 
     let resp = state
         .http_client
         .post(&url)
-        .header("X-Api-Key", state.config.pull.effective_key())
+        .header("X-Api-Key", state.pull_cfg.effective_key())
         .json(&serde_json::json!({ "ids": ids }))
         .send()
         .await?

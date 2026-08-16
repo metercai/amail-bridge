@@ -207,12 +207,59 @@ pub struct PullConfig {
     pub poll_interval_sec: u64,
     #[serde(default)]
     pub system_id: String,
+
+    /// Optional multi-system pull configuration. Each entry pulls its own
+    /// system's pending deliveries (per-system API key / system_id).
+    /// When empty, a single system is synthesized from the flat fields above
+    /// (backward compatible with the legacy single-system config).
+    #[serde(default)]
+    pub systems: Vec<PullSystemConfig>,
+}
+
+/// One pull target (a single cloud system).
+#[derive(Debug, Clone, Deserialize)]
+pub struct PullSystemConfig {
+    #[serde(default)]
+    pub amail_url: String,
+    #[serde(default)]
+    pub admin_key: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_poll_interval")]
+    pub poll_interval_sec: u64,
+    #[serde(default)]
+    pub system_id: String,
+}
+
+impl PullSystemConfig {
+    /// Returns the effective API key: prefer api_key, fall back to admin_key.
+    pub fn effective_key(&self) -> &str {
+        if !self.api_key.is_empty() { &self.api_key } else { &self.admin_key }
+    }
 }
 
 impl PullConfig {
     /// Returns the effective API key: prefer api_key, fall back to admin_key.
+    /// Kept for compatibility; new code should use PullSystemConfig::effective_key.
+    #[allow(dead_code)]
     pub fn effective_key(&self) -> &str {
         if !self.api_key.is_empty() { &self.api_key } else { &self.admin_key }
+    }
+
+    /// Resolve the list of pull systems: explicit `systems` array when
+    /// non-empty, otherwise a single synthesized entry from the flat fields
+    /// (legacy single-system config compatibility).
+    pub fn resolved_systems(&self) -> Vec<PullSystemConfig> {
+        if !self.systems.is_empty() {
+            return self.systems.clone();
+        }
+        vec![PullSystemConfig {
+            amail_url: self.amail_url.clone(),
+            admin_key: self.admin_key.clone(),
+            api_key: self.api_key.clone(),
+            poll_interval_sec: self.poll_interval_sec,
+            system_id: self.system_id.clone(),
+        }]
     }
 }
 
@@ -275,6 +322,7 @@ impl Default for PullConfig {
             api_key: String::new(),
             poll_interval_sec: 10,
             system_id: String::new(),
+            systems: Vec::new(),
         }
     }
 }
@@ -326,14 +374,16 @@ impl BridgeConfig {
     /// Validate configuration and emit warnings for insecure settings.
     pub fn validate(&self) {
         if self.mode == "pull" {
-            if self.pull.amail_url.is_empty() {
-                tracing::warn!("pull.amail_url is empty — pull loop will fail");
-            }
-            if self.pull.admin_key.is_empty() {
-                tracing::warn!("pull.admin_key is empty — authentication will fail");
-            }
-            if self.pull.system_id.is_empty() {
-                tracing::warn!("pull.system_id is empty — pending query will fail");
+            for (i, sys) in self.pull.resolved_systems().iter().enumerate() {
+                if sys.amail_url.is_empty() {
+                    tracing::warn!(system_index = i, "pull.systems[{}].amail_url is empty — pull loop will fail", i);
+                }
+                if sys.admin_key.is_empty() && sys.api_key.is_empty() {
+                    tracing::warn!(system_index = i, "pull.systems[{}] has no admin_key/api_key — authentication will fail", i);
+                }
+                if sys.system_id.is_empty() {
+                    tracing::warn!(system_index = i, "pull.systems[{}].system_id is empty — pending query will fail", i);
+                }
             }
         }
         if self.hostname.is_some() && self.tls_cert.is_none() && self.tls_key.is_none() {
@@ -490,5 +540,53 @@ system_id = "s"
 "#).unwrap();
         let compiled = cfg.compiled_hosts();
         assert!(compiled.is_empty());
+    }
+
+    #[test]
+    fn test_pull_multi_system_resolved() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+systems = [
+    { amail_url = "https://a.tm", admin_key = "ka", system_id = "sys-a", poll_interval_sec = 2 },
+    { amail_url = "https://b.tm", admin_key = "kb", system_id = "sys-b", poll_interval_sec = 5 },
+]
+"#).unwrap();
+        let systems = cfg.pull.resolved_systems();
+        assert_eq!(systems.len(), 2);
+        assert_eq!(systems[0].system_id, "sys-a");
+        assert_eq!(systems[0].effective_key(), "ka");
+        assert_eq!(systems[1].poll_interval_sec, 5);
+        assert_eq!(systems[1].effective_key(), "kb");
+    }
+
+    #[test]
+    fn test_pull_legacy_single_system_resolved() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+amail_url = "https://a.tm"
+admin_key = "legacy-key"
+system_id = "legacy-sys"
+"#).unwrap();
+        assert!(cfg.pull.systems.is_empty(), "no explicit systems array");
+        let systems = cfg.pull.resolved_systems();
+        assert_eq!(systems.len(), 1, "legacy flat fields synthesize one system");
+        assert_eq!(systems[0].system_id, "legacy-sys");
+        assert_eq!(systems[0].effective_key(), "legacy-key");
+        assert_eq!(systems[0].amail_url, "https://a.tm");
+    }
+
+    #[test]
+    fn test_pull_multi_system_api_key_preferred() {
+        let cfg: BridgeConfig = toml::from_str(r#"
+mode = "pull"
+[pull]
+systems = [
+    { amail_url = "https://a.tm", admin_key = "ka", api_key = "ak", system_id = "sys-a" },
+]
+"#).unwrap();
+        let systems = cfg.pull.resolved_systems();
+        assert_eq!(systems[0].effective_key(), "ak", "api_key preferred over admin_key");
     }
 }
