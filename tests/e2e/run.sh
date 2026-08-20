@@ -7,8 +7,8 @@ warn() { echo -e "${RED}[WARN]${NC} $*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-GW_BIN="${GW_BIN:-$HOME/amail-gateway/target/debug/amail-gateway}"
-BRIDGE_BIN="${BRIDGE_BIN:-$PROJECT_DIR/target/debug/amail-bridge}"
+GW_BIN="${GW_BIN:-$HOME/aimail-gateway/target/debug/aimail-gateway}"
+BRIDGE_BIN="${BRIDGE_BIN:-$PROJECT_DIR/target/debug/aimail-bridge}"
 
 WORK_DIR="${WORK_DIR:-/tmp/bridge-e2e}"
 RS=35010; RH=39010; RS2=35011; RH2=39011; BP=38080; BP2=38081; HP=39999
@@ -104,7 +104,7 @@ curl -s "$BASE:${HP}/health" >/dev/null || fail "hermes not healthy"
 pass "mock hermes running"
 
 # ═══ Routes ═══
-cat > "$WORK_DIR/bridge/amail_routes.toml" << EOF
+cat > "$WORK_DIR/bridge/aimail_routes.toml" << EOF
 "agent@bridge.test" = "127.0.0.1:${HP}"
 "agent2@bridge.test" = "127.0.0.1:${HP}"
 "cc-agent@bridge.test" = "127.0.0.1:${HP}"
@@ -121,7 +121,7 @@ EOF
 echo; echo "═════ PUSH TESTS ═════"
 cat > "$WORK_DIR/bridge/bridge-push.toml" << EOF
 bind = "127.0.0.1:${BP}"
-routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+routes_file = "$WORK_DIR/bridge/aimail_routes.toml"
 mode = "push"
 [push]
 body_limit_mb = 10
@@ -209,7 +209,7 @@ done
 pass "relay B seeded"
 
 # System B routes join the shared bridge route table (hot-reload)
-cat >> "$WORK_DIR/bridge/amail_routes.toml" << EOF
+cat >> "$WORK_DIR/bridge/aimail_routes.toml" << EOF
 "agent@bridge2.test" = "127.0.0.1:${HP}"
 "agent2@bridge2.test" = "127.0.0.1:${HP}"
 "cc-agent@bridge2.test" = "127.0.0.1:${HP}"
@@ -295,7 +295,7 @@ SYSPULL=$(curl -s -X POST "$B2/api/v1/admin/api-keys" -H "$H ${AK}" -H "$J" \
 
 cat > "$WORK_DIR/bridge/bridge-pull.toml" << EOF
 bind = "127.0.0.1:${BP2}"
-routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+routes_file = "$WORK_DIR/bridge/aimail_routes.toml"
 mode = "pull"
 [pull]
 amail_url = "127.0.0.1:${RH2}"
@@ -398,7 +398,7 @@ SYSPULL2=$(curl -s -X POST "$B4/api/v1/admin/api-keys" -H "$H ${AK4}" -H "$J" \
 pass "pull relay B seeded"
 
 # pull2.test routes join the shared route table
-cat >> "$WORK_DIR/bridge/amail_routes.toml" << EOF
+cat >> "$WORK_DIR/bridge/aimail_routes.toml" << EOF
 "agent@pull2.test" = "127.0.0.1:${HP}"
 "agent2@pull2.test" = "127.0.0.1:${HP}"
 "cc-agent@pull2.test" = "127.0.0.1:${HP}"
@@ -408,7 +408,7 @@ EOF
 # Multi-system bridge: systems array → both gateways, each with its own key
 cat > "$WORK_DIR/bridge/bridge-pull2.toml" << EOF
 bind = "127.0.0.1:${BP3}"
-routes_file = "$WORK_DIR/bridge/amail_routes.toml"
+routes_file = "$WORK_DIR/bridge/aimail_routes.toml"
 mode = "pull"
 [pull]
 systems = [

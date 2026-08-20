@@ -1,4 +1,4 @@
-//! amail-bridge — transparent bridge between amail relay and Hermes gateway.
+//! aimail-bridge — transparent bridge between amail relay and Hermes gateway.
 //!
 //! Two modes:
 //! - **push**: expose a single external endpoint, transparently proxy to gateway webhook ports.
@@ -7,12 +7,12 @@
 //! ## CLI
 //!
 //! ```text
-//! amail-bridge [--daemon] [--pid-file <path>] [--log-file <path>] [--config <path>]
+//! aimail-bridge [--daemon] [--pid-file <path>] [--log-file <path>] [--config <path>]
 //! ```
 //!
 //! `--daemon` detaches from the terminal (double-fork), redirects stdio to
-//! the log file (default: ~/.hermes/amail-bridge.log), and writes a PID file
-//! (default: ~/.hermes/amail-bridge.pid).
+//! the log file (default: ~/.hermes/aimail-bridge.log), and writes a PID file
+//! (default: ~/.hermes/aimail-bridge.pid).
 
 mod config;
 mod pull;
@@ -51,13 +51,13 @@ pub fn parse_args() -> CliArgs {
             "--log-file" => { i += 1; cli.log_file = Some(PathBuf::from(&args[i])); }
             "--config" | "-c" => { i += 1; cli.config_path = Some(PathBuf::from(&args[i])); }
             "--help" | "-h" => {
-                println!("amail-bridge — transparent relay-gateway bridge\n");
-                println!("Usage: amail-bridge [OPTIONS]\n");
+                println!("aimail-bridge — transparent relay-gateway bridge\n");
+                println!("Usage: aimail-bridge [OPTIONS]\n");
                 println!("Options:");
                 println!("  -d, --daemon       Detach from terminal, run in background");
-                println!("  --pid-file <path>  PID file path (default: ~/.hermes/amail-bridge.pid)");
-                println!("  --log-file <path>  Log file path (default: ~/.hermes/amail-bridge.log)");
-                println!("  -c, --config <path> Config file path (default: ./amail_bridge.toml)");
+                println!("  --pid-file <path>  PID file path (default: ~/.hermes/aimail-bridge.pid)");
+                println!("  --log-file <path>  Log file path (default: ~/.hermes/aimail-bridge.log)");
+                println!("  -c, --config <path> Config file path (default: ./aimail_bridge.toml)");
                 println!("  -h, --help         Show this help");
                 process::exit(0);
             }
@@ -191,8 +191,8 @@ pub fn main() {
     let hermes_home = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".hermes");
-    let pid_file = cli.pid_file.clone().unwrap_or_else(|| hermes_home.join("amail-bridge.pid"));
-    let log_file = cli.log_file.clone().unwrap_or_else(|| hermes_home.join("amail-bridge.log"));
+    let pid_file = cli.pid_file.clone().unwrap_or_else(|| hermes_home.join("aimail-bridge.pid"));
+    let log_file = cli.log_file.clone().unwrap_or_else(|| hermes_home.join("aimail-bridge.log"));
 
     // Daemonize before any tokio runtime exists
     if cli.daemon {
@@ -231,10 +231,10 @@ async fn async_main(
 
     let config = BridgeConfig::load(cli.config_path.as_deref())?;
 
-    // Init tracing from config (amail-gateway compatible)
+    // Init tracing from config (aimail-gateway compatible)
     init_tracing(&config.logging, cli.daemon, &log_file);
 
-    tracing::info!("amail-bridge starting (pid={})", process::id());
+    tracing::info!("aimail-bridge starting (pid={})", process::id());
 
     config.validate();
     let router = Arc::new(router::ProfileRouter::new(
@@ -289,7 +289,7 @@ async fn async_main(
         admin_router.merge(push_router)
     } else if config.mode != "pull" {
         tracing::error!(mode = %config.mode, "Unknown mode. Use 'push' or 'pull'.");
-        return Err(format!("Unknown mode: {} (fix amail_bridge.toml)", config.mode).into());
+        return Err(format!("Unknown mode: {} (fix aimail_bridge.toml)", config.mode).into());
     } else {
         admin_router
     };
@@ -318,7 +318,7 @@ async fn async_main(
             }
         } else {
             // No static certs — try ACME auto-cert (referenced from
-            // amail-advanced's acme.rs implementation).
+            // aimail-advanced's acme.rs implementation).
             match acme_tls_config(&config).await {
                 Ok(t) => Some(t),
                 Err(e) => {
@@ -390,7 +390,7 @@ async fn async_main(
 
 /// Try to build a TLS config via ACME auto-cert (Let's Encrypt HTTP-01).
 ///
-/// Flow (mirrors amail-advanced):
+/// Flow (mirrors aimail-advanced):
 /// 1. cache dir = acme_cache or ~/.acme_cache
 /// 2. existing cert < 60 days old → reuse
 /// 3. else acquire via HTTP-01 (challenge_path → external server writes,
@@ -480,7 +480,7 @@ async fn start_https(
     shutdown: Arc<AtomicBool>,
     tls: axum_server::tls_rustls::RustlsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("amail-bridge serving HTTPS on {}", addr);
+    tracing::info!("aimail-bridge serving HTTPS on {}", addr);
     let handle = axum_server::Handle::new();
     let shutdown_clone = shutdown.clone();
     let handle_clone = handle.clone();
@@ -503,7 +503,7 @@ async fn start_https(
     Ok(())
 }
 
-/// Initialize tracing subscriber from LoggingConfig (amail-gateway compatible).
+/// Initialize tracing subscriber from LoggingConfig (aimail-gateway compatible).
 /// When daemon mode is active, log file from CLI args takes precedence.
 fn init_tracing(cfg: &crate::config::LoggingConfig, daemon: bool, daemon_log: &std::path::Path) {
     use tracing_subscriber::EnvFilter;
@@ -544,7 +544,7 @@ mod cli_tests {
 
     #[test]
     fn test_parse_args_default() {
-        let cli = parse_args_from(&["amail-bridge".into()]);
+        let cli = parse_args_from(&["aimail-bridge".into()]);
         assert!(!cli.daemon);
         assert!(cli.pid_file.is_none());
         assert!(cli.log_file.is_none());
@@ -553,14 +553,14 @@ mod cli_tests {
 
     #[test]
     fn test_parse_args_daemon() {
-        let cli = parse_args_from(&["amail-bridge".into(), "--daemon".into()]);
+        let cli = parse_args_from(&["aimail-bridge".into(), "--daemon".into()]);
         assert!(cli.daemon);
     }
 
     #[test]
     fn test_parse_args_config() {
         let cli = parse_args_from(&[
-            "amail-bridge".into(),
+            "aimail-bridge".into(),
             "-c".into(),
             "/tmp/test.toml".into(),
         ]);
@@ -570,7 +570,7 @@ mod cli_tests {
     #[test]
     fn test_parse_args_pid_file() {
         let cli = parse_args_from(&[
-            "amail-bridge".into(),
+            "aimail-bridge".into(),
             "--pid-file".into(),
             "/var/run/bridge.pid".into(),
         ]);
@@ -580,7 +580,7 @@ mod cli_tests {
     #[test]
     fn test_parse_args_log_file() {
         let cli = parse_args_from(&[
-            "amail-bridge".into(),
+            "aimail-bridge".into(),
             "--log-file".into(),
             "/var/log/bridge.log".into(),
         ]);

@@ -1,10 +1,10 @@
 [English](README.md) | 🇨🇳 中文
 
-# amail-bridge
+# aimail-bridge
 
 > 零端口，邮件入站。一个端口，即时透传所有 agent。
 
-连接 [amail-gateway](https://github.com/metercai/amail-gateway) 和
+连接 [aimail-gateway](https://github.com/metercai/aimail-gateway) 和
 [Hermes agent](https://github.com/nousresearch/hermes-agent) webhook 端点的
 高性能透明桥接。以最小攻击面解决异构多 agent 部署的防火墙穿透问题。
 
@@ -60,7 +60,7 @@ SIGINT/SIGTERM 优雅排空。
 ### 零配置自动化
 
 - **API 路由注册** — Agent 通过 `POST /api/v1/routes` 注册 webhook
-- **inotify 热更新** — 修改 `amail_routes.toml` 即时生效
+- **inotify 热更新** — 修改 `aimail_routes.toml` 即时生效
 - **ACME 自动 TLS** — 设置 `hostname` → 自动 Let's Encrypt 证书（HTTP-01 挑战），
   缓存复用，每 ~60 天自动续期
 - **双端口模式** — `addr` 端口 80 + `hostname` 已设 → 自动 80→443 重定向
@@ -74,7 +74,7 @@ SIGINT/SIGTERM 优雅排空。
 
 ```
                        ┌─────────────────────────────────┐
-                       │         amail-bridge             │
+                       │         aimail-bridge             │
                        │  (单一公网端口 38080)              │
 gateway ──POST──►      │                                  │
   alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► webhook:8645
@@ -116,12 +116,12 @@ gateway (公网)                              NAT/防火墙内
 ## 快速开始
 
 ```bash
-git clone https://github.com/metercai/amail-bridge
-cd amail-bridge
+git clone https://github.com/metercai/aimail-bridge
+cd aimail-bridge
 cargo build --release
 
 # Push 模式（一个端口，所有 agent）
-cat > amail_bridge.toml << 'EOF'
+cat > aimail_bridge.toml << 'EOF'
 mode = "push"
 [push]
 addr = "0.0.0.0:38080"
@@ -130,7 +130,7 @@ allowed_ips = ["10.0.0.0/8"]
 EOF
 
 # Pull 模式（零端口，纯出站）
-cat > amail_bridge.toml << 'EOF'
+cat > aimail_bridge.toml << 'EOF'
 mode = "pull"
 [pull]
 amail_url = "http://gateway.example.com:38080"
@@ -139,10 +139,10 @@ system_id = "admin"
 EOF
 
 # 运行
-./target/release/amail-bridge
+./target/release/aimail-bridge
 
 # 或守护模式
-./target/release/amail-bridge --daemon
+./target/release/aimail-bridge --daemon
 
 # 检查健康状态
 curl http://localhost:38080/health
@@ -187,7 +187,7 @@ poll_interval_sec = 10               # 轮询间隔秒（默认：10）
 ```toml
 [logging]
 level = "info"                        # 日志级别（默认："info"）
-file = "/var/log/amail-bridge.log"   # 日志文件路径，不设则 stdout
+file = "/var/log/aimail-bridge.log"   # 日志文件路径，不设则 stdout
 ```
 
 

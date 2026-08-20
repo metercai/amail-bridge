@@ -1,10 +1,10 @@
-//! Bridge configuration: `amail_bridge.toml` + env var overrides.
-//! Config format aligned with amail-gateway.
+//! Bridge configuration: `aimail_bridge.toml` + env var overrides.
+//! Config format aligned with aimail-gateway.
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// Full bridge configuration, deserialised from `amail_bridge.toml`.
+/// Full bridge configuration, deserialised from `aimail_bridge.toml`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BridgeConfig {
     #[serde(default = "default_mode")]
@@ -12,7 +12,7 @@ pub struct BridgeConfig {
 
     /// Listen address in "host:port" format (e.g. "0.0.0.0:38080").
     /// Used for admin API (/health, /api/v1/routes) and push webhooks.
-    /// `bind` is the canonical name (aligned with amail-gateway/advanced);
+    /// `bind` is the canonical name (aligned with aimail-gateway/advanced);
     /// legacy `addr` key still parses via serde alias.
     #[serde(default = "default_listen_bind", alias = "addr")]
     pub bind: String,
@@ -75,7 +75,7 @@ pub struct BridgeConfig {
     #[serde(skip)]
     pub default_profile_dir: PathBuf,
 
-    /// Path to amail_routes.toml (default: alongside amail_bridge.toml).
+    /// Path to aimail_routes.toml (default: alongside aimail_bridge.toml).
     #[serde(skip)]
     pub routes_file: PathBuf,
 
@@ -246,7 +246,7 @@ impl PullConfig {
     }
 }
 
-/// Logging configuration (amail-gateway compatible).
+/// Logging configuration (aimail-gateway compatible).
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
@@ -259,7 +259,7 @@ impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
             level: default_log_level(),
-            file: Some(PathBuf::from("/var/log/amail-bridge.log")),
+            file: Some(PathBuf::from("/var/log/aimail-bridge.log")),
         }
     }
 }
@@ -321,7 +321,7 @@ impl BridgeConfig {
     pub fn load(path: Option<&std::path::Path>) -> Result<Self, Box<dyn std::error::Error>> {
         let config_path = path
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("amail_bridge.toml"));
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().join("aimail_bridge.toml"));
         let mut cfg: BridgeConfig = {
             let content = std::fs::read_to_string(&config_path)?;
             toml::from_str(&content)?
@@ -350,7 +350,7 @@ impl BridgeConfig {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp")).join(".hermes")
         });
         cfg.default_profile_dir = hermes_root;
-        cfg.routes_file = config_path.parent().unwrap_or(Path::new(".")).join("amail_routes.toml");
+        cfg.routes_file = config_path.parent().unwrap_or(Path::new(".")).join("aimail_routes.toml");
 
         // Normalize amail_url: add http:// if no scheme present
         if !cfg.pull.amail_url.contains("://") && !cfg.pull.amail_url.is_empty() {

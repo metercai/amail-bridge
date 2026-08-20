@@ -1,6 +1,6 @@
 //! Automatic TLS certificate acquisition & renewal via Let's Encrypt (ACME).
 //!
-//! Ported from amail-advanced's acme.rs (same flow, same instant-acme
+//! Ported from aimail-advanced's acme.rs (same flow, same instant-acme
 //! usage) — AUDIT-1 TLS wiring, user requirement 2026-08-16.
 //!
 //! ## Flow

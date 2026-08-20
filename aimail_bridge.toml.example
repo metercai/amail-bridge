@@ -1,6 +1,6 @@
-# amail-bridge configuration 
+# aimail-bridge configuration 
 #
-# Copy this file to amail_bridge.toml and edit to match your setup.
+# Copy this file to aimail_bridge.toml and edit to match your setup.
 # hostname = "bridge.internal"         # public address (defaults to addr)
 
 # mode = "push"  # "push" or "pull" (default: "push")
@@ -12,7 +12,7 @@ admin_allowed_ips = ["127.0.0.1", "::1"]   # Admin API IP whitelist
 # Logging
 # [logging]
 # level = "info"                    # log level (default: "info")
-# file = "/var/log/amail-bridge.log"  # log file path (default: /var/log/amail-bridge.log)
+# file = "/var/log/aimail-bridge.log"  # log file path (default: /var/log/aimail-bridge.log)
 
 # ── Pull mode (bridge polls gateway outbound) ───────────────────────
 # [pull]

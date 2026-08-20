@@ -1,6 +1,6 @@
-# amail-bridge route table
+# aimail-bridge route table
 #
-# Copy this file to amail_routes.toml (same directory as amail_bridge.toml).
+# Copy this file to aimail_routes.toml (same directory as aimail_bridge.toml).
 # Changes take effect immediately via inotify hot-reload.
 #
 # Local agent routes are auto-discovered from ~/.hermes/profiles/*/.

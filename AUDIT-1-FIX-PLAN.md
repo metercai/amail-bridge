@@ -1,6 +1,6 @@
-# amail-bridge 审计修复计划(AUDIT-1)
+# aimail-bridge 审计修复计划(AUDIT-1)
 
-审计日期: 2026-08-16 | 代码: /home/ubuntu/amail-bridge(main)
+审计日期: 2026-08-16 | 代码: /home/ubuntu/aimail-bridge(main)
 基线: cargo check 零警告,92 测试全绿。
 
 ## 发现汇总

@@ -1,10 +1,10 @@
-# amail-bridge
+# aimail-bridge
 
 [🇨🇳 中文](README_zh.md)
 
 > Zero ports, email inbound. One port, instant forwarding to all agents.
 
-A high-performance transparent bridge between [amail-gateway](https://github.com/metercai/amail-gateway)
+A high-performance transparent bridge between [aimail-gateway](https://github.com/metercai/aimail-gateway)
 and [Hermes agent](https://github.com/nousresearch/hermes-agent) gateway webhook endpoints.
 Solves firewall penetration for heterogeneous multi-agent deployments with minimal
 surface area.
@@ -64,7 +64,7 @@ Works for both push and pull modes.
 ### Zero-config automation
 
 - **API route registration** — agents register their webhook via `POST /api/v1/routes`
-- **inotify hot-reload** — changes to `amail_routes.toml` are applied immediately
+- **inotify hot-reload** — changes to `aimail_routes.toml` are applied immediately
 - **ACME auto-TLS** — set `hostname` → automatic Let's Encrypt certificate
   (HTTP-01 challenge), cached and auto-renewed every ~60 days
 - **Dual-port mode** — `addr` port 80 + `hostname` set → auto 80→443 redirect
@@ -78,7 +78,7 @@ Works for both push and pull modes.
 
 ```
                        ┌─────────────────────────────────┐
-                       │         amail-bridge             │
+                       │         aimail-bridge             │
                        │  (single public port 38080)       │
 gateway ──POST──►      │                                  │
   alice@...+bob@...    │  alice → 127.0.0.1:8645          │──► webhook:8645
@@ -120,12 +120,12 @@ gateway (public)                              behind NAT/firewall
 ## Quickstart
 
 ```bash
-git clone https://github.com/metercai/amail-bridge
-cd amail-bridge
+git clone https://github.com/metercai/aimail-bridge
+cd aimail-bridge
 cargo build --release
 
 # Push mode (single port, all agents)
-cat > amail_bridge.toml << 'EOF'
+cat > aimail_bridge.toml << 'EOF'
 mode = "push"
 [push]
 addr = "0.0.0.0:38080"
@@ -134,7 +134,7 @@ allowed_ips = ["10.0.0.0/8"]
 EOF
 
 # Pull mode (zero ports, outbound only)
-cat > amail_bridge.toml << 'EOF'
+cat > aimail_bridge.toml << 'EOF'
 mode = "pull"
 [pull]
 amail_url = "http://gateway.example.com:38080"
@@ -143,10 +143,10 @@ system_id = "admin"
 EOF
 
 # Run
-./target/release/amail-bridge
+./target/release/aimail-bridge
 
 # Or daemonize
-./target/release/amail-bridge --daemon
+./target/release/aimail-bridge --daemon
 
 # Check health
 curl http://localhost:38080/health
@@ -191,7 +191,7 @@ poll_interval_sec = 10               # poll interval in seconds (default: 10)
 ```toml
 [logging]
 level = "info"                        # log level (default: "info")
-file = "/var/log/amail-bridge.log"   # log file, stdout if unset (default: none)
+file = "/var/log/aimail-bridge.log"   # log file, stdout if unset (default: none)
 ```
 
 
