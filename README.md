@@ -200,13 +200,13 @@ file = "/var/log/aimail-bridge.log"   # log file, stdout if unset (default: none
 
 | Variable | Equivalent config |
 |---|---|
-| `AMAIL_BRIDGE_MODE` | `mode` |
-| `AMAIL_BRIDGE_HOSTNAME` | `push.hostname` |
-| `AMAIL_GATEWAY_URL` | `pull.amail_url` |
-| `AMAIL_BRIDGE_ADMIN_KEY` | `pull.admin_key` |
-| `AMAIL_BRIDGE_SYSTEM_ID` | `pull.system_id` |
-| `AMAIL_BRIDGE_POLL_SECS` | `pull.poll_interval_sec` |
-| `AMAIL_BRIDGE_ALLOWED_IPS` | `push.allowed_ips` (comma-separated) |
+| `AIMAIL_BRIDGE_MODE` | `mode` |
+| `AIMAIL_BRIDGE_HOSTNAME` | `push.hostname` |
+| `AIMAIL_GATEWAY_URL` | `pull.amail_url` |
+| `AIMAIL_BRIDGE_ADMIN_KEY` | `pull.admin_key` |
+| `AIMAIL_BRIDGE_SYSTEM_ID` | `pull.system_id` |
+| `AIMAIL_BRIDGE_POLL_SECS` | `pull.poll_interval_sec` |
+| `AIMAIL_BRIDGE_ALLOWED_IPS` | `push.allowed_ips` (comma-separated) |
 | `HERMES_HOME` | Hermes home directory (default `~/.hermes`) |
 | `RUST_LOG` | tracing filter (overrides `logging.level`) |
 

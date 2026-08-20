@@ -328,17 +328,17 @@ impl BridgeConfig {
         };
 
         // Env overrides
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_MODE") { cfg.mode = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_HOSTNAME") {
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_MODE") { cfg.mode = v; }
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_HOSTNAME") {
             if !v.is_empty() { cfg.hostname = Some(v); }
         }
-        if let Ok(v) = std::env::var("AMAIL_GATEWAY_URL") { cfg.pull.amail_url = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_ADMIN_KEY") { cfg.pull.admin_key = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_POLL_SECS") {
+        if let Ok(v) = std::env::var("AIMAIL_GATEWAY_URL") { cfg.pull.amail_url = v; }
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_ADMIN_KEY") { cfg.pull.admin_key = v; }
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_SYSTEM_ID") { cfg.pull.system_id = v; }
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_POLL_SECS") {
             cfg.pull.poll_interval_sec = v.parse().unwrap_or(10);
         }
-        if let Ok(v) = std::env::var("AMAIL_BRIDGE_ALLOWED_IPS") {
+        if let Ok(v) = std::env::var("AIMAIL_BRIDGE_ALLOWED_IPS") {
             cfg.push.allowed_ips = v.split(',').map(|s| s.trim().to_string()).collect();
         }
         if let Ok(v) = std::env::var("HERMES_HOME") {
