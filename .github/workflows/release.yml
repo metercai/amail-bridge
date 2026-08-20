@@ -63,14 +63,14 @@ jobs:
       - name: Rename binary
         shell: bash
         run: |
-          BIN="amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}"
-          cp target/${{ matrix.target }}/release/amail-bridge${{ matrix.ext }} "$BIN"
+          BIN="aimail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}"
+          cp target/${{ matrix.target }}/release/aimail-bridge${{ matrix.ext }} "$BIN"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
-          name: amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}
-          path: amail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}
+          name: aimail-bridge-${{ github.ref_name }}-${{ matrix.platform }}
+          path: aimail-bridge-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -81,7 +81,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: amail-bridge-${{ github.ref_name }}-*/*
+          files: aimail-bridge-${{ github.ref_name }}-*/*
           body: |
             ## Platform variants
 
