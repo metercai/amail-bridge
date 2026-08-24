@@ -1,7 +1,7 @@
 //! Push-mode HTTP server — transparent webhook proxy.
 //!
 //! Receives POSTs from relay at a single stable endpoint, looks up
-//! the target agent via the X-Amail-Email header, and forwards the
+//! the target agent via the X-AIMail-Email header, and forwards the
 //! raw body + all headers to the gateway's webhook port on localhost.
 //!
 //! Optional per-IP allowlist for DDoS protection — configure
@@ -239,7 +239,7 @@ async fn check_rate_limit(
 /// Transparent webhook proxy.
 ///
 /// Relay sends:  POST /webhooks/amail-inbound
-///               X-Amail-Email: alice@admin.relay
+///               X-AIMail-Email: alice@admin.relay
 ///               X-Webhook-Signature: sha256=...
 ///               {payload}
 ///
@@ -258,11 +258,15 @@ async fn handle_webhook(
         }
     }
 
-    // ── Single mode (X-Amail-Email header) ───────────────────────
-    let email = match headers.get("X-Amail-Email").and_then(|v| v.to_str().ok()) {
+    // ── Single mode (X-AIMail-Email header; legacy X-Amail-Email 回退) ──
+    let email = match headers
+        .get("X-AIMail-Email")
+        .or_else(|| headers.get("X-Amail-Email"))
+        .and_then(|v| v.to_str().ok())
+    {
         Some(e) => e.to_string(),
         None => {
-            return (StatusCode::BAD_REQUEST, "Missing X-Amail-Email header").into_response();
+            return (StatusCode::BAD_REQUEST, "Missing X-AIMail-Email header").into_response();
         }
     };
 
@@ -305,10 +309,11 @@ fn batch_header_value(
     sig: &str,
     ts: &str,
 ) -> Option<(&'static str, String)> {
+    // 新旧配置名都归一到新名输出(名单新旧并存期, 调用方按输出名去重)。
     match name {
-        "X-Amail-Email" => Some(("X-Amail-Email", email.to_string())),
+        "X-AIMail-Email" | "X-Amail-Email" => Some(("X-AIMail-Email", email.to_string())),
         "X-Webhook-Signature" => Some(("X-Webhook-Signature", sig.to_string())),
-        "X-Mailrelay-Timestamp" => Some(("X-Mailrelay-Timestamp", ts.to_string())),
+        "X-AIMail-Timestamp" | "X-Mailrelay-Timestamp" => Some(("X-AIMail-Timestamp", ts.to_string())),
         "content-type" => Some(("content-type", "application/json".to_string())),
         _ => None,
     }
@@ -371,11 +376,15 @@ async fn handle_batch_webhook(
         let ts = entry["timestamp"].as_str().unwrap_or("");
 
         // Build request with config-driven forward headers
+        // (新旧名并存期按输出名去重, 防同一逻辑头重复下发)
         let mut req = state.http_client.post(target);
+        let mut emitted: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
         for name in &state.forward_headers {
             match batch_header_value(name.as_str(), email, sig, ts) {
                 Some((hdr_name, value)) => {
-                    req = req.header(hdr_name, value);
+                    if emitted.insert(hdr_name) {
+                        req = req.header(hdr_name, value);
+                    }
                 }
                 None => {
                     tracing::debug!(header = %name, "Unknown forward header — skipping");

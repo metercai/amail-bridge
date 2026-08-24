@@ -158,10 +158,14 @@ fn default_rate_limit() -> u32 { 30 }
 fn default_body_limit() -> u32 { 20 }
 
 fn default_forward_headers() -> Vec<String> {
+    // 新名在前; 旧名保留至过渡清理(agent/gateway 全量升级后删除)。
+    // 单投模式只复制"在场"的头, 新旧不会同时出现, 无重复。
     vec![
-        "X-Amail-Email".into(),
+        "X-AIMail-Email".into(),
+        "X-AIMail-Timestamp".into(),
+        "X-Amail-Email".into(),         // legacy (transition)
+        "X-Mailrelay-Timestamp".into(), // legacy (transition)
         "X-Webhook-Signature".into(),
-        "X-Mailrelay-Timestamp".into(),
         "content-type".into(),
     ]
 }
