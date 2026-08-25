@@ -190,6 +190,38 @@ struct BatchDelivery {
     headers: serde_json::Value,
 }
 
+/// v1 API signature for a gateway request (spec: aimail-gateway
+/// docs/API-SIGNATURE-PROTOCOL.md).
+///
+/// `sig = hex(HMAC-SHA256(key = sha256(raw_key), msg = base))` where
+/// `base = METHOD\npath_and_query\ntimestamp\nsha256_hex(body)`.
+/// The raw key stays offline — only the signature + identity cross the wire.
+pub fn api_sign(api_key: &str, method: &str, path: &str, body: &[u8]) -> (String, String) {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+
+    let mut kh = Sha256::new();
+    kh.update(api_key.as_bytes());
+    let key_hash = hex::encode(kh.finalize());
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().to_string())
+        .unwrap_or_else(|_| "0".into());
+
+    let mut bh = Sha256::new();
+    bh.update(body);
+    let body_hash = hex::encode(bh.finalize());
+
+    let base = format!("{method}\n{path}\n{now_ms}\n{body_hash}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key_hash.as_bytes())
+        .expect("HMAC can take a key of any size");
+    mac.update(base.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+
+    (now_ms, sig)
+}
+
 /// Fetch pending deliveries from relay (batched response).  Returns empty vec if no routes.
 async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn std::error::Error + Send + Sync>> {
     let emails: Vec<String> = state.router.list_emails();
@@ -209,16 +241,21 @@ async fn fetch_pending(state: &PullState) -> Result<Vec<PendingBatch>, Box<dyn s
         "{}/api/v1/admin/pending",
         state.pull_cfg.amail_url.trim_end_matches('/'),
     );
-    let body = serde_json::json!({
+    let body_json = serde_json::json!({
         "limit": 50,
         "filter": domains.into_iter().collect::<Vec<_>>(),
     });
+    let body_bytes = serde_json::to_vec(&body_json)?;
+    let (ts, sig) = api_sign(state.pull_cfg.effective_key(), "POST", "/api/v1/admin/pending", &body_bytes);
 
     let resp = state
         .http_client
         .post(&url)
-        .header("X-Api-Key", state.pull_cfg.effective_key())
-        .json(&body)
+        .header("X-Api-Identity", state.pull_cfg.system_id.as_str())
+        .header("X-Api-Timestamp", ts)
+        .header("X-Api-Signature", sig)
+        .header("content-type", "application/json")
+        .body(body_bytes)
         .send()
         .await?
         .error_for_status()?;
@@ -240,11 +277,17 @@ async fn ack_deliveries(state: &PullState, ids: &[i64]) -> Result<usize, Box<dyn
         state.pull_cfg.amail_url.trim_end_matches('/'),
     );
 
+    let ack_body = serde_json::to_vec(&serde_json::json!({ "ids": ids }))?;
+    let (ts, sig) = api_sign(state.pull_cfg.effective_key(), "POST", "/api/v1/admin/pending/ack", &ack_body);
+
     let resp = state
         .http_client
         .post(&url)
-        .header("X-Api-Key", state.pull_cfg.effective_key())
-        .json(&serde_json::json!({ "ids": ids }))
+        .header("X-Api-Identity", state.pull_cfg.system_id.as_str())
+        .header("X-Api-Timestamp", ts)
+        .header("X-Api-Signature", sig)
+        .header("content-type", "application/json")
+        .body(ack_body)
         .send()
         .await?
         .error_for_status()?;
@@ -374,6 +417,50 @@ mod tests {
         let url = "http://admin.relay";
         let expected = format!("{}/api/v1/admin/pending/ack", url.trim_end_matches('/'));
         assert_eq!(expected, "http://admin.relay/api/v1/admin/pending/ack");
+    }
+
+    // ── v1 API signature (3-language parity) ──────────────
+
+    #[test]
+    fn test_api_sign_matches_canonical_vector() {
+        // SAME canonical vector as base Rust / Python / TS — pinning one
+        // value across all four implementations proves bit-identical parity.
+        // (aimail-gateway docs/API-SIGNATURE-PROTOCOL.md)
+        let raw_key = "0123456789abcdef0123456789abcdef";
+        let method = "POST";
+        let path = "/api/v1/whitelists?domain=alice%40x.com&value=%40mx-a.test";
+        let body = b"{\"direction\":\"to\"}";
+
+        use hmac::{Hmac, Mac};
+        use sha2::{Digest, Sha256};
+        let key_hash = {
+            let mut h = Sha256::new();
+            h.update(raw_key.as_bytes());
+            hex::encode(h.finalize())
+        };
+        assert_eq!(
+            key_hash,
+            "3eb1bd439947eb762998e566ccc2e099c791118b2f40579cc4f7da2b5061b7f9"
+        );
+        let ts = "1756000000000";
+        let body_hash = {
+            let mut h = Sha256::new();
+            h.update(body);
+            hex::encode(h.finalize())
+        };
+        let base = format!("{method}\n{path}\n{ts}\n{body_hash}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(key_hash.as_bytes()).unwrap();
+        mac.update(base.as_bytes());
+        let expected = hex::encode(mac.finalize().into_bytes());
+        assert_eq!(
+            expected,
+            "cabf840e1d1a8dd9d6885762beae087f422dbd4d6d20c9ca404896120a45bcbd"
+        );
+
+        // And the helper itself produces a well-formed (ts, sig) pair.
+        let (ts2, sig2) = api_sign(raw_key, method, path, body);
+        assert!(ts2.parse::<u128>().is_ok(), "timestamp must be epoch millis");
+        assert_eq!(sig2.len(), 64, "signature must be 64 hex chars");
     }
 
     // ── JSON serde edge cases ────────────────────────────
